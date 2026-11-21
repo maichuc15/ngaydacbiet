@@ -32,6 +32,8 @@ export interface FamilyEvent {
 
 export interface FundContribution {
   id: string;
+  /** 'income' (đóng góp vào quỹ gia tộc) or 'expense' (chi chung gia tộc). Defaults to 'income'. */
+  type?: 'income' | 'expense';
   memberId?: string;
   contributorName: string;
   dateISO: string;
@@ -63,9 +65,33 @@ export interface PersonalFundSummary {
   baseBudget: number;
   totalIncome: number;
   totalAvailable: number;
+  /** Attended events from Lịch đám */
+  eventSpent: number;
+  /** Pending upcoming events from Lịch đám */
+  eventUpcoming: number;
+  /** eventSpent + eventUpcoming (excludes skipped events) */
+  eventActiveAmount: number;
+  /** Manual expense transactions recorded in Quỹ cá nhân */
+  manualExpense: number;
+  /** Total planned + spent = eventActiveAmount + manualExpense */
   totalExpense: number;
+  /** Actual cash spent = eventSpent + manualExpense */
+  actualSpent: number;
+  /** Remaining after planned events + manual expenses */
   remaining: number;
+  /** Cash on hand = totalAvailable - actualSpent */
+  cashOnHand: number;
   incomeCount: number;
+  expenseCount: number;
+}
+
+export interface ClanFundSummary {
+  baseBudget: number;
+  totalContributions: number;
+  totalAvailable: number;
+  totalClanExpense: number;
+  remaining: number;
+  contributionCount: number;
   expenseCount: number;
 }
 

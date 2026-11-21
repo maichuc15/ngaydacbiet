@@ -3,6 +3,7 @@ import {
   AppState,
   AttendanceStatus,
   CalendarMode,
+  ClanFundSummary,
   EventCategory,
   EventPriority,
   FamilyBranch,
@@ -234,27 +235,39 @@ function createInitialContributions(now = new Date()): FundContribution[] {
   return [
     {
       id: 'ctb_1',
+      type: 'income',
       memberId: 'mem_bo',
       contributorName: 'Nguyễn Văn Minh',
       dateISO: addDaysISO(now, -25),
       amount: 3_000_000,
-      note: 'Đóng quỹ đám đầu năm',
+      note: 'Đóng quỹ gia tộc đầu năm',
     },
     {
       id: 'ctb_2',
+      type: 'income',
       memberId: 'mem_me',
       contributorName: 'Trần Thị Hoa',
       dateISO: addDaysISO(now, -20),
       amount: 2_000_000,
-      note: 'Góp quỹ giỗ chạp trong năm',
+      note: 'Góp quỹ từ đường & giỗ tổ',
     },
     {
       id: 'ctb_3',
+      type: 'income',
       memberId: 'mem_anh_ca',
       contributorName: 'Nguyễn Minh Tuấn',
       dateISO: addDaysISO(now, -10),
       amount: 1_500_000,
-      note: 'Góp thêm cho giỗ Ông Nội & đám cuối năm',
+      note: 'Góp quỹ khuyến học & sửa sang nhà thờ họ',
+    },
+    {
+      id: 'ctb_4',
+      type: 'expense',
+      memberId: 'mem_bac_hai',
+      contributorName: 'Sửa sang & hương hoa nhà thờ họ',
+      dateISO: addDaysISO(now, -5),
+      amount: 1_500_000,
+      note: 'Bác Hai đại diện chi mua lễ vật chạp tổ',
     },
   ];
 }
@@ -596,17 +609,22 @@ export class FamilyLedgerStore {
     this.emit();
   }
 
-  // --- Fund Contributions CRUD ---
+  // --- Clan Fund Entries CRUD (Independent from Lịch đám) ---
   addContribution(input: {
+    type?: 'income' | 'expense';
     memberId?: string;
     contributorName: string;
     dateISO: string;
     amount: number;
     note: string;
   }): FundContribution {
-    const cleanName = input.contributorName.trim() || 'Thành viên gia đình';
+    const entryType = input.type ?? 'income';
+    const cleanName =
+      input.contributorName.trim() ||
+      (entryType === 'expense' ? 'Khoản chi quỹ gia tộc' : 'Thành viên gia đình');
     const item: FundContribution = {
       id: `ctb_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      type: entryType,
       memberId: input.memberId || undefined,
       contributorName: cleanName,
       dateISO: input.dateISO,
@@ -624,6 +642,7 @@ export class FamilyLedgerStore {
   updateContribution(
     id: string,
     patch: {
+      type?: 'income' | 'expense';
       memberId?: string;
       contributorName?: string;
       dateISO?: string;
@@ -635,6 +654,7 @@ export class FamilyLedgerStore {
       if (c.id !== id) return c;
       return {
         ...c,
+        type: patch.type ?? c.type ?? 'income',
         memberId:
           patch.memberId !== undefined ? patch.memberId || undefined : c.memberId,
         contributorName:
@@ -657,6 +677,34 @@ export class FamilyLedgerStore {
     const contributions = this.state.contributions.filter((c) => c.id !== id);
     this.state = {...this.state, contributions};
     this.emit();
+  }
+
+  computeClanFundSummary(): ClanFundSummary {
+    let totalContributions = 0;
+    let totalClanExpense = 0;
+    let contributionCount = 0;
+    let expenseCount = 0;
+    for (const c of this.state.contributions) {
+      if (c.type === 'expense') {
+        totalClanExpense += c.amount;
+        expenseCount += 1;
+      } else {
+        totalContributions += c.amount;
+        contributionCount += 1;
+      }
+    }
+    const baseBudget = this.state.fundBudget;
+    const totalAvailable = baseBudget + totalContributions;
+    const remaining = totalAvailable - totalClanExpense;
+    return {
+      baseBudget,
+      totalContributions,
+      totalAvailable,
+      totalClanExpense,
+      remaining,
+      contributionCount,
+      expenseCount,
+    };
   }
 
   // --- Personal Fund Budget & Transactions CRUD ---
@@ -736,7 +784,7 @@ export class FamilyLedgerStore {
 
   computePersonalSummary(): PersonalFundSummary {
     let totalIncome = 0;
-    let totalExpense = 0;
+    let manualExpense = 0;
     let incomeCount = 0;
     let expenseCount = 0;
     for (const tx of this.state.personalTransactions) {
@@ -744,19 +792,40 @@ export class FamilyLedgerStore {
         totalIncome += tx.amount;
         incomeCount += 1;
       } else {
-        totalExpense += tx.amount;
+        manualExpense += tx.amount;
         expenseCount += 1;
       }
     }
+
+    let eventSpent = 0;
+    let eventUpcoming = 0;
+    for (const ev of this.state.events) {
+      if (ev.status === 'attended') {
+        eventSpent += ev.amount;
+      } else if (ev.status === 'pending') {
+        eventUpcoming += ev.amount;
+      }
+    }
+
+    const eventActiveAmount = eventSpent + eventUpcoming;
     const baseBudget = this.state.personalFundBudget;
     const totalAvailable = baseBudget + totalIncome;
+    const totalExpense = eventActiveAmount + manualExpense;
+    const actualSpent = eventSpent + manualExpense;
     const remaining = totalAvailable - totalExpense;
+    const cashOnHand = totalAvailable - actualSpent;
     return {
       baseBudget,
       totalIncome,
       totalAvailable,
+      eventSpent,
+      eventUpcoming,
+      eventActiveAmount,
+      manualExpense,
       totalExpense,
+      actualSpent,
       remaining,
+      cashOnHand,
       incomeCount,
       expenseCount,
     };

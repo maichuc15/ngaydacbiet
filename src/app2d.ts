@@ -122,13 +122,15 @@ export class FamilyLedgerApp2D {
   private personalFilter: 'all' | PersonalTransactionType = 'all';
   private editingPersonalTxId: string | null = null;
 
-  // --- Fund page draft & edit states ---
+  // --- Fund page draft & edit states (Standalone Quỹ gia tộc) ---
   private editingBaseFund = false;
+  private draftContribType: 'income' | 'expense' = 'income';
   private draftContribMemberId = '';
   private draftContribName = '';
   private draftContribDateISO = addDaysISO(new Date(), 0);
   private draftContribAmount = 1_000_000;
   private draftContribNote = '';
+  private clanFundFilter: 'all' | 'income' | 'expense' = 'all';
   private editingContributionId: string | null = null;
   private editingFundEventId: string | null = null;
 
@@ -226,9 +228,9 @@ export class FamilyLedgerApp2D {
     if (this.activePage === 'calendar') {
       pageHtml = this.renderCalendarPage(now);
     } else if (this.activePage === 'personal') {
-      pageHtml = this.renderPersonalFundPage();
+      pageHtml = this.renderPersonalFundPage(now);
     } else if (this.activePage === 'fund') {
-      pageHtml = this.renderFundPage(now);
+      pageHtml = this.renderFundPage();
     } else {
       pageHtml = this.renderFamilyPage();
     }
@@ -344,23 +346,8 @@ export class FamilyLedgerApp2D {
     const state = this.store.getState();
     const summary = this.store.computeSummary();
     const visibleEvents = this.getFilteredEvents();
-    const todayLunar = solarToLunar(
-      now.getDate(),
-      now.getMonth() + 1,
-      now.getFullYear()
-    );
     const draftLunarPreview = solarISOToLunar(this.draftDateISO);
     const draftLeapMonth = getLeapMonthOfYear(this.draftLunarYear);
-
-    const fundRatio =
-      summary.fundBudget > 0
-        ? Math.min(
-            100,
-            Math.round((summary.totalActiveAmount / summary.fundBudget) * 100)
-          )
-        : summary.totalActiveAmount > 0
-          ? 100
-          : 0;
 
     const counts: Record<FilterMode, number> = {
       all: state.events.length,
@@ -371,10 +358,6 @@ export class FamilyLedgerApp2D {
       attended: summary.attendedCount,
       skipped: summary.skippedCount,
     };
-
-    const upcomingIn7 = state.events.filter(
-      (e) => e.status === 'pending' && getDaysUntil(e.dateISO, now) <= 7
-    );
 
     const filterDefs: Array<{mode: FilterMode; label: string}> = [
       {mode: 'all', label: 'Tất cả'},
@@ -401,79 +384,6 @@ export class FamilyLedgerApp2D {
     ];
 
     return `
-      <!-- Top Quỹ Gia Tộc Section -->
-      <section class="clan-fund-card" aria-label="Quỹ gia tộc">
-        <div class="clan-fund-header">
-          <div>
-            <h1 class="clan-fund-title">Quỹ gia tộc</h1>
-            <p class="clan-fund-sub tabular">
-              ${escapeHtml(formatTodayHeaderVN(now))} · ${escapeHtml(formatLunarShort(todayLunar))} (${escapeHtml(getCanChiYear(todayLunar.year))}) · ${upcomingIn7.length} đám trong 7 ngày tới
-            </p>
-          </div>
-          <div class="clan-fund-actions">
-            <button type="button" class="btn-secondary-sm" data-action="nav-page" data-page="fund">
-              Quản lý quỹ gia tộc
-            </button>
-          </div>
-        </div>
-
-        <div class="kpi-strip clan-kpi-strip" aria-label="Báo cáo quỹ gia tộc và lịch tham dự">
-          <div class="kpi-cell">
-            <div class="kpi-label-row">
-              <span class="kpi-label">Tổng quỹ gia tộc</span>
-              <div class="kpi-inline-tools">
-                <button type="button" class="btn-micro" data-action="fund-delta" data-delta="-1000000">-1tr</button>
-                <button type="button" class="btn-micro" data-action="fund-delta" data-delta="1000000">+1tr</button>
-                <button type="button" class="btn-micro" data-action="toggle-edit-base-fund">${this.editingBaseFund ? 'Đóng' : 'Sửa'}</button>
-              </div>
-            </div>
-            ${
-              this.editingBaseFund
-                ? `<form class="inline-fund-form" id="base-fund-edit-form">
-                    <input type="number" id="base-fund-input" class="inline-num-input tabular" min="0" step="100000" value="${summary.baseFundBudget}" aria-label="Nhập số tiền quỹ gốc đầu năm" />
-                    <button type="submit" class="btn-micro-save">Lưu</button>
-                  </form>`
-                : `<div class="kpi-value tabular text-positive">${escapeHtml(formatVND(summary.fundBudget))}</div>`
-            }
-            <div class="kpi-sub tabular">
-              Quỹ gốc ${escapeHtml(formatCompactVND(summary.baseFundBudget))} · Đóng góp ${escapeHtml(formatCompactVND(summary.totalContributions))}
-            </div>
-          </div>
-
-          <div class="kpi-cell">
-            <span class="kpi-label">Tổng tiền đám</span>
-            <div class="kpi-value tabular">${escapeHtml(formatVND(summary.totalActiveAmount))}</div>
-            <div class="kpi-sub tabular">
-              Đã đi ${escapeHtml(formatCompactVND(summary.totalSpent))} · Dự chi ${escapeHtml(formatCompactVND(summary.totalUpcomingAmount))}
-            </div>
-          </div>
-
-          <div class="kpi-cell">
-            <span class="kpi-label">Quỹ gia tộc còn lại</span>
-            <div class="kpi-value tabular ${summary.remainingFund < 0 ? 'text-danger' : 'text-positive'}">
-              ${escapeHtml(formatVND(summary.remainingFund))}
-            </div>
-            <div class="fund-meter" aria-hidden="true">
-              <div class="fund-meter-fill ${summary.remainingFund < 0 ? 'is-over' : ''}" style="width: ${fundRatio}%"></div>
-            </div>
-            <div class="kpi-sub">
-              ${summary.remainingFund >= 0 ? `Đã dùng ${fundRatio}% quỹ gia tộc` : 'Đang vượt quỹ · Nên bổ sung thêm'}
-            </div>
-          </div>
-
-          <div class="kpi-cell">
-            <div class="kpi-label-row">
-              <span class="kpi-label">Báo cáo đi / không đi</span>
-              <button type="button" class="btn-micro" data-action="nav-page" data-page="personal">Quỹ cá nhân</button>
-            </div>
-            <div class="kpi-value tabular">${summary.attendedCount} đã đi · ${summary.skippedCount} không đi</div>
-            <div class="kpi-sub tabular">
-              ${summary.pendingCount} ngày sắp tới · ${summary.urgentCount} ngày gấp
-            </div>
-          </div>
-        </div>
-      </section>
-
       ${this.renderUpcomingRemindersSection(now)}
 
       <!-- Main 2-Column Workspace -->
@@ -608,7 +518,7 @@ export class FamilyLedgerApp2D {
             </div>
 
             <div class="field-group">
-              <label class="field-label" for="qa-amount">Tiền đám dự kiến (đồng)</label>
+              <label class="field-label" for="qa-amount">Tiền đám dự kiến (đồng · trừ vào Quỹ cá nhân)</label>
               <input
                 id="qa-amount"
                 type="number"
@@ -760,10 +670,17 @@ export class FamilyLedgerApp2D {
       (item) => item.days > this.reminderWindowDays
     );
 
+    const todayLunar = solarToLunar(
+      now.getDate(),
+      now.getMonth() + 1,
+      now.getFullYear()
+    );
+    const todayLine = `${formatTodayHeaderVN(now)} · ${formatLunarShort(todayLunar)} (${getCanChiYear(todayLunar.year)})`;
+
     const subtitle =
       activeReminders.length > 0
-        ? `${activeReminders.length} ngày sắp đến trong ${this.reminderWindowDays} ngày tới${urgentReminderCount > 0 ? ` · ${urgentReminderCount} ngày gấp (≤ 3 ngày)` : ''} · Dự chi ${formatVND(totalReminderAmount)}`
-        : `Không có ngày giỗ hoặc đám nào cần nhắc trong ${this.reminderWindowDays} ngày tới`;
+        ? `${todayLine} · ${activeReminders.length} ngày sắp đến trong ${this.reminderWindowDays} ngày tới${urgentReminderCount > 0 ? ` (${urgentReminderCount} ngày gấp)` : ''} · Dự chi ${formatVND(totalReminderAmount)}`
+        : `${todayLine} · Không có ngày giỗ hoặc đám nào cần nhắc trong ${this.reminderWindowDays} ngày tới`;
 
     const rowsHtml = activeReminders
       .map(({ev, days}) => {
@@ -1122,11 +1039,12 @@ export class FamilyLedgerApp2D {
   }
 
   // =========================================================================
-  // TRANG 2: QUỸ CÁ NHÂN (PERSONAL FUND MANAGEMENT PAGE)
+  // TRANG 2: QUỸ CÁ NHÂN (PERSONAL FUND — LINKED WITH LỊCH ĐÁM)
   // =========================================================================
-  private renderPersonalFundPage(): string {
+  private renderPersonalFundPage(now: Date): string {
     const state = this.store.getState();
     const summary = this.store.computePersonalSummary();
+    const sortedEvents = this.store.getSortedEvents('all');
     const sortedTx = [...state.personalTransactions]
       .filter(
         (tx) => this.personalFilter === 'all' || tx.type === this.personalFilter
@@ -1161,7 +1079,7 @@ export class FamilyLedgerApp2D {
         <div>
           <h1 class="page-heading">Quản lý Quỹ Cá Nhân</h1>
           <p class="page-subheading">
-            Theo dõi khoản tiền đi đám, mừng cưới, hiếu hỷ riêng của bản thân tách biệt với quỹ chung gia tộc. Chạm "Sửa" để cập nhật nhanh bất kỳ khoản nào.
+            Tự động liên kết toàn bộ tiền đám đã đi và dự chi từ mục Lịch đám, đồng thời cho phép ghi thêm các khoản nạp quỹ hoặc chi tiêu hiếu hỷ riêng của bản thân.
           </p>
         </div>
       </section>
@@ -1197,23 +1115,23 @@ export class FamilyLedgerApp2D {
         </div>
 
         <div class="kpi-cell">
-          <span class="kpi-label">Tổng đã chi cá nhân</span>
+          <span class="kpi-label">Tổng tiền đám &amp; chi cá nhân</span>
           <div class="kpi-value tabular">${escapeHtml(formatVND(summary.totalExpense))}</div>
           <div class="kpi-sub tabular">
-            ${summary.expenseCount} khoản chi đám / việc riêng
+            Lịch đám ${escapeHtml(formatCompactVND(summary.eventActiveAmount))} (Đã đi ${escapeHtml(formatCompactVND(summary.eventSpent))} · Dự chi ${escapeHtml(formatCompactVND(summary.eventUpcoming))}) · Chi ngoài ${escapeHtml(formatCompactVND(summary.manualExpense))}
           </div>
         </div>
 
         <div class="kpi-cell">
-          <span class="kpi-label">Quỹ cá nhân còn lại</span>
+          <span class="kpi-label">Quỹ cá nhân còn lại (sau dự chi)</span>
           <div class="kpi-value tabular ${summary.remaining < 0 ? 'text-danger' : 'text-positive'}">
             ${escapeHtml(formatVND(summary.remaining))}
           </div>
           <div class="fund-meter" aria-hidden="true">
             <div class="fund-meter-fill ${summary.remaining < 0 ? 'is-over' : ''}" style="width: ${usedRatio}%"></div>
           </div>
-          <div class="kpi-sub">
-            ${summary.remaining >= 0 ? `Đã dùng ${usedRatio}% quỹ cá nhân` : 'Đang vượt ngân sách cá nhân'}
+          <div class="kpi-sub tabular">
+            Thực tế đang cầm: ${escapeHtml(formatVND(summary.cashOnHand))}
           </div>
         </div>
       </section>
@@ -1315,43 +1233,64 @@ export class FamilyLedgerApp2D {
           </form>
         </section>
 
-        <!-- Right Column: Personal Fund Ledger -->
-        <section class="panel-surface" aria-label="Sổ thu chi quỹ cá nhân">
-          <div class="list-header">
-            <div class="list-header-top">
-              <h2 class="panel-title">Sổ thu chi quỹ cá nhân (${sortedTx.length})</h2>
-              <span class="panel-hint tabular">Còn lại: ${escapeHtml(formatVND(summary.remaining))}</span>
+        <!-- Right Column: Linked Lịch Đám Expenses + Personal Ledger -->
+        <div class="stack-col">
+          <section class="panel-surface" aria-label="Bảng kê tiền đám liên kết từ Lịch đám">
+            <div class="panel-header">
+              <h2 class="panel-title">Tiền từng ngày đám từ Lịch đám (${sortedEvents.length})</h2>
+              <span class="panel-hint tabular">Tổng: ${escapeHtml(formatVND(summary.eventActiveAmount))}</span>
             </div>
 
-            <div class="filter-bar" role="tablist" aria-label="Lọc sổ quỹ cá nhân">
-              ${filterDefs
-                .map(
-                  (f) => `
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected="${this.personalFilter === f.id}"
-                      class="filter-tab tabular ${this.personalFilter === f.id ? 'is-active' : ''}"
-                      data-action="set-personal-filter"
-                      data-filter="${f.id}"
-                    >${escapeHtml(f.label)} (${f.count})</button>
-                  `
-                )
-                .join('')}
+            <div class="event-list">
+              ${
+                sortedEvents.length === 0
+                  ? `<div class="empty-state">
+                      <p class="empty-title">Chưa có ngày đám nào trong Lịch đám.</p>
+                    </div>`
+                  : sortedEvents
+                      .map((ev) => this.renderFundEventRow(ev, now))
+                      .join('')
+              }
             </div>
-          </div>
+          </section>
 
-          <div class="event-list">
-            ${
-              sortedTx.length === 0
-                ? `<div class="empty-state">
-                    <p class="empty-title">Chưa có khoản thu chi nào trong mục này.</p>
-                    <p class="empty-sub">Hãy ghi nhanh một khoản chi đi đám hoặc nạp thêm quỹ ở khung bên cạnh.</p>
-                  </div>`
-                : sortedTx.map((tx) => this.renderPersonalTxRow(tx)).join('')
-            }
-          </div>
-        </section>
+          <section class="panel-surface" aria-label="Sổ thu chi cá nhân khác">
+            <div class="list-header">
+              <div class="list-header-top">
+                <h2 class="panel-title">Khoản nạp quỹ &amp; chi cá nhân khác (${sortedTx.length})</h2>
+                <span class="panel-hint tabular">Nạp: ${escapeHtml(formatVND(summary.totalIncome))}</span>
+              </div>
+
+              <div class="filter-bar" role="tablist" aria-label="Lọc sổ quỹ cá nhân">
+                ${filterDefs
+                  .map(
+                    (f) => `
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected="${this.personalFilter === f.id}"
+                        class="filter-tab tabular ${this.personalFilter === f.id ? 'is-active' : ''}"
+                        data-action="set-personal-filter"
+                        data-filter="${f.id}"
+                      >${escapeHtml(f.label)} (${f.count})</button>
+                    `
+                  )
+                  .join('')}
+              </div>
+            </div>
+
+            <div class="event-list">
+              ${
+                sortedTx.length === 0
+                  ? `<div class="empty-state">
+                      <p class="empty-title">Chưa có khoản thu chi nào trong mục này.</p>
+                      <p class="empty-sub">Hãy ghi nhanh một khoản nạp quỹ hoặc chi tiêu riêng ở khung bên cạnh.</p>
+                    </div>`
+                  : sortedTx.map((tx) => this.renderPersonalTxRow(tx)).join('')
+              }
+            </div>
+          </section>
+        </div>
       </div>
     `;
   }
@@ -1440,41 +1379,53 @@ export class FamilyLedgerApp2D {
   }
 
   // =========================================================================
-  // TRANG 3: QUỸ ĐÁM (FUND MANAGEMENT PAGE)
+  // TRANG 3: QUỸ GIA TỘC (STANDALONE CLAN FUND — UNLINKED FROM LỊCH ĐÁM)
   // =========================================================================
-  private renderFundPage(now: Date): string {
+  private renderFundPage(): string {
     const state = this.store.getState();
-    const summary = this.store.computeSummary();
-    const sortedEvents = this.store.getSortedEvents('all');
-    const sortedContribs = [...state.contributions].sort((a, b) =>
-      b.dateISO.localeCompare(a.dateISO)
-    );
+    const summary = this.store.computeClanFundSummary();
+    const sortedContribs = [...state.contributions]
+      .filter((c) => {
+        const entryType = c.type ?? 'income';
+        return this.clanFundFilter === 'all' || entryType === this.clanFundFilter;
+      })
+      .sort((a, b) => b.dateISO.localeCompare(a.dateISO));
 
     const fundRatio =
-      summary.fundBudget > 0
+      summary.totalAvailable > 0
         ? Math.min(
             100,
-            Math.round((summary.totalActiveAmount / summary.fundBudget) * 100)
+            Math.round((summary.totalClanExpense / summary.totalAvailable) * 100)
           )
-        : summary.totalActiveAmount > 0
+        : summary.totalClanExpense > 0
           ? 100
           : 0;
+
+    const filterDefs: Array<{
+      id: 'all' | 'income' | 'expense';
+      label: string;
+      count: number;
+    }> = [
+      {id: 'all', label: 'Tất cả', count: state.contributions.length},
+      {id: 'income', label: 'Đóng góp', count: summary.contributionCount},
+      {id: 'expense', label: 'Khoản chi', count: summary.expenseCount},
+    ];
 
     return `
       <section class="page-intro">
         <div>
           <h1 class="page-heading">Quản lý Quỹ Gia Tộc</h1>
           <p class="page-subheading">
-            Theo dõi ngân sách quỹ gia tộc đầu năm, ghi nhận đóng góp của các thành viên và kiểm soát toàn bộ tiền đám đã đi, sắp tới.
+            Sổ quỹ chung của gia tộc được quản lý độc lập để ghi nhận đóng góp và chi tiêu chung họ hàng, không cộng trừ vào Lịch đám hay Quỹ cá nhân của bạn.
           </p>
         </div>
       </section>
 
-      <!-- 4-Column Fund KPI Strip -->
+      <!-- 4-Column Standalone Clan Fund KPI Strip -->
       <section class="kpi-strip" aria-label="Tổng quan quỹ gia tộc">
         <div class="kpi-cell">
           <div class="kpi-label-row">
-            <span class="kpi-label">Quỹ gốc đầu năm</span>
+            <span class="kpi-label">Quỹ gia tộc gốc đầu năm</span>
             <div class="kpi-inline-tools">
               <button type="button" class="btn-micro" data-action="fund-delta" data-delta="-1000000">-1tr</button>
               <button type="button" class="btn-micro" data-action="fund-delta" data-delta="1000000">+1tr</button>
@@ -1484,57 +1435,75 @@ export class FamilyLedgerApp2D {
           ${
             this.editingBaseFund
               ? `<form class="inline-fund-form" id="base-fund-edit-form">
-                  <input type="number" id="base-fund-input" class="inline-num-input tabular" min="0" step="100000" value="${summary.baseFundBudget}" aria-label="Nhập số tiền quỹ gốc đầu năm" />
+                  <input type="number" id="base-fund-input" class="inline-num-input tabular" min="0" step="100000" value="${summary.baseBudget}" aria-label="Nhập số tiền quỹ gia tộc gốc đầu năm" />
                   <button type="submit" class="btn-micro-save">Lưu</button>
                 </form>`
-              : `<div class="kpi-value tabular">${escapeHtml(formatVND(summary.baseFundBudget))}</div>`
+              : `<div class="kpi-value tabular">${escapeHtml(formatVND(summary.baseBudget))}</div>`
           }
-          <div class="kpi-sub">Ngân sách chuẩn bị ban đầu</div>
+          <div class="kpi-sub">Số dư chuyển tiếp đầu năm của gia tộc</div>
         </div>
 
         <div class="kpi-cell">
           <span class="kpi-label">Tổng quỹ gia tộc hiện có</span>
-          <div class="kpi-value tabular text-positive">${escapeHtml(formatVND(summary.fundBudget))}</div>
+          <div class="kpi-value tabular text-positive">${escapeHtml(formatVND(summary.totalAvailable))}</div>
           <div class="kpi-sub tabular">
-            Gồm ${state.contributions.length} khoản đóng góp (${escapeHtml(formatVND(summary.totalContributions))})
+            Gồm ${summary.contributionCount} khoản đóng góp (${escapeHtml(formatVND(summary.totalContributions))})
           </div>
         </div>
 
         <div class="kpi-cell">
-          <span class="kpi-label">Tổng tiền đám (Đã đi + Dự chi)</span>
-          <div class="kpi-value tabular">${escapeHtml(formatVND(summary.totalActiveAmount))}</div>
+          <span class="kpi-label">Tổng chi chung gia tộc</span>
+          <div class="kpi-value tabular">${escapeHtml(formatVND(summary.totalClanExpense))}</div>
           <div class="kpi-sub tabular">
-            Đã chi ${escapeHtml(formatVND(summary.totalSpent))} · Dự chi ${escapeHtml(formatVND(summary.totalUpcomingAmount))}
+            ${summary.expenseCount} khoản chi chung · Tách biệt với Lịch đám
           </div>
         </div>
 
         <div class="kpi-cell">
-          <span class="kpi-label">Tiền quỹ còn lại (sau dự chi)</span>
-          <div class="kpi-value tabular ${summary.remainingFund < 0 ? 'text-danger' : 'text-positive'}">
-            ${escapeHtml(formatVND(summary.remainingFund))}
+          <span class="kpi-label">Quỹ gia tộc còn lại</span>
+          <div class="kpi-value tabular ${summary.remaining < 0 ? 'text-danger' : 'text-positive'}">
+            ${escapeHtml(formatVND(summary.remaining))}
           </div>
           <div class="fund-meter" aria-hidden="true">
-            <div class="fund-meter-fill ${summary.remainingFund < 0 ? 'is-over' : ''}" style="width: ${fundRatio}%"></div>
+            <div class="fund-meter-fill ${summary.remaining < 0 ? 'is-over' : ''}" style="width: ${fundRatio}%"></div>
           </div>
-          <div class="kpi-sub tabular">
-            Thực tế đang cầm: ${escapeHtml(formatVND(summary.cashOnHand))}
+          <div class="kpi-sub">
+            ${summary.remaining >= 0 ? `Đã chi ${fundRatio}% quỹ gia tộc` : 'Đang vượt quỹ gia tộc'}
           </div>
         </div>
       </section>
 
       <div class="workspace-grid">
-        <!-- Left Column: Add Contribution to Fund -->
-        <section class="panel-surface quick-add-panel" aria-label="Ghi nhận đóng góp quỹ đám">
+        <!-- Left Column: Add Clan Fund Income / Expense -->
+        <section class="panel-surface quick-add-panel" aria-label="Ghi thu chi quỹ gia tộc">
           <div class="panel-header">
-            <h2 class="panel-title">Thêm khoản đóng quỹ</h2>
-            <span class="panel-hint">Tự cộng vào tổng quỹ</span>
+            <h2 class="panel-title">Ghi thu / chi quỹ gia tộc</h2>
+            <span class="panel-hint">Quản lý riêng biệt</span>
           </div>
 
           <form id="add-contribution-form" class="quick-add-form" novalidate>
             <div class="field-group">
-              <label class="field-label" for="ctb-member">Chọn thành viên trong gia đình</label>
+              <span class="field-label">Loại khoản mục</span>
+              <div class="priority-toggle-row" role="group" aria-label="Chọn loại giao dịch quỹ gia tộc">
+                <button
+                  type="button"
+                  class="seg-btn flex-1 ${this.draftContribType === 'income' ? 'is-active' : ''}"
+                  data-action="select-contrib-type"
+                  data-type="income"
+                >Đóng góp vào quỹ</button>
+                <button
+                  type="button"
+                  class="seg-btn flex-1 ${this.draftContribType === 'expense' ? 'is-active-urgent' : ''}"
+                  data-action="select-contrib-type"
+                  data-type="expense"
+                >Chi quỹ gia tộc</button>
+              </div>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="ctb-member">Thành viên gia tộc liên quan (tùy chọn)</label>
               <select id="ctb-member" class="text-input">
-                <option value="">-- Nhập tên người đóng bên dưới --</option>
+                <option value="">-- Nhập tên hoặc nội dung bên dưới --</option>
                 ${state.members
                   .map(
                     (m) => `
@@ -1548,19 +1517,21 @@ export class FamilyLedgerApp2D {
             </div>
 
             <div class="field-group">
-              <label class="field-label" for="ctb-name">Tên người đóng góp</label>
+              <label class="field-label" for="ctb-name">
+                ${this.draftContribType === 'expense' ? 'Nội dung khoản chi gia tộc' : 'Tên người đóng góp'}
+              </label>
               <input
                 id="ctb-name"
                 type="text"
                 class="text-input"
                 maxlength="56"
-                placeholder="Ví dụ: Anh Tuấn, Cô Lan..."
+                placeholder="${this.draftContribType === 'expense' ? 'Ví dụ: Sửa sang từ đường, Mua lễ chạp tổ...' : 'Ví dụ: Anh Tuấn, Bác Hai...'}"
                 value="${escapeHtml(this.draftContribName)}"
               />
             </div>
 
             <div class="field-group">
-              <label class="field-label" for="ctb-date">Ngày đóng góp</label>
+              <label class="field-label" for="ctb-date">Ngày ghi nhận</label>
               <input
                 id="ctb-date"
                 type="date"
@@ -1570,7 +1541,7 @@ export class FamilyLedgerApp2D {
             </div>
 
             <div class="field-group">
-              <label class="field-label" for="ctb-amount">Số tiền đóng góp (đồng)</label>
+              <label class="field-label" for="ctb-amount">Số tiền (đồng)</label>
               <input
                 id="ctb-amount"
                 type="number"
@@ -1579,7 +1550,7 @@ export class FamilyLedgerApp2D {
                 step="100000"
                 value="${this.draftContribAmount}"
               />
-              <div class="button-row-wrap" role="group" aria-label="Chọn nhanh số tiền đóng quỹ">
+              <div class="button-row-wrap" role="group" aria-label="Chọn nhanh số tiền quỹ gia tộc">
                 ${CONTRIBUTION_PRESETS.map(
                   (amt) => `
                     <button
@@ -1600,71 +1571,80 @@ export class FamilyLedgerApp2D {
                 type="text"
                 class="text-input"
                 maxlength="80"
-                placeholder="Ví dụ: Đóng quỹ giỗ chạp năm nay"
+                placeholder="${this.draftContribType === 'expense' ? 'Ví dụ: Chi theo quyết nghị họp họ' : 'Ví dụ: Đóng quỹ gia tộc năm nay'}"
                 value="${escapeHtml(this.draftContribNote)}"
               />
             </div>
 
             <button type="submit" class="btn-submit-full">
-              Ghi nhận đóng góp quỹ
+              ${this.draftContribType === 'expense' ? 'Lưu khoản chi gia tộc' : 'Ghi nhận đóng góp quỹ'}
             </button>
           </form>
         </section>
 
-        <!-- Right Column: Contributions Ledger + Detailed Event Expenses -->
-        <div class="stack-col">
-          <section class="panel-surface" aria-label="Lịch sử đóng góp quỹ đám">
-            <div class="panel-header">
-              <h2 class="panel-title">Các khoản đóng góp vào quỹ (${sortedContribs.length})</h2>
-              <span class="panel-hint tabular">Tổng thu: ${escapeHtml(formatVND(summary.totalContributions))}</span>
+        <!-- Right Column: Standalone Clan Fund Ledger -->
+        <section class="panel-surface" aria-label="Sổ thu chi quỹ gia tộc">
+          <div class="list-header">
+            <div class="list-header-top">
+              <h2 class="panel-title">Sổ thu chi quỹ gia tộc (${sortedContribs.length})</h2>
+              <span class="panel-hint tabular">Còn lại: ${escapeHtml(formatVND(summary.remaining))}</span>
             </div>
 
-            <div class="event-list">
-              ${
-                sortedContribs.length === 0
-                  ? `<div class="empty-state">
-                      <p class="empty-title">Chưa có khoản đóng góp nào.</p>
-                      <p class="empty-sub">Hãy ghi nhận các khoản đóng quỹ của thành viên ở khung bên cạnh.</p>
-                    </div>`
-                  : sortedContribs.map((c) => this.renderContributionRow(c)).join('')
-              }
+            <div class="filter-bar" role="tablist" aria-label="Lọc sổ quỹ gia tộc">
+              ${filterDefs
+                .map(
+                  (f) => `
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected="${this.clanFundFilter === f.id}"
+                      class="filter-tab tabular ${this.clanFundFilter === f.id ? 'is-active' : ''}"
+                      data-action="set-clan-fund-filter"
+                      data-filter="${f.id}"
+                    >${escapeHtml(f.label)} (${f.count})</button>
+                  `
+                )
+                .join('')}
             </div>
-          </section>
+          </div>
 
-          <section class="panel-surface" aria-label="Bảng kê tiền chi theo từng ngày đám">
-            <div class="panel-header">
-              <h2 class="panel-title">Chi tiết tiền từng ngày đám (${sortedEvents.length})</h2>
-              <span class="panel-hint">Bấm "Sửa" để cập nhật nhanh số tiền hoặc trạng thái</span>
-            </div>
-
-            <div class="event-list">
-              ${
-                sortedEvents.length === 0
-                  ? `<div class="empty-state">
-                      <p class="empty-title">Chưa có ngày đám nào trong sổ.</p>
-                    </div>`
-                  : sortedEvents
-                      .map((ev) => this.renderFundEventRow(ev, now))
-                      .join('')
-              }
-            </div>
-          </section>
-        </div>
+          <div class="event-list">
+            ${
+              sortedContribs.length === 0
+                ? `<div class="empty-state">
+                    <p class="empty-title">Chưa có khoản thu chi nào trong mục này.</p>
+                    <p class="empty-sub">Hãy ghi nhận đóng góp thành viên hoặc khoản chi chung gia tộc ở khung bên cạnh.</p>
+                  </div>`
+                : sortedContribs.map((c) => this.renderContributionRow(c)).join('')
+            }
+          </div>
+        </section>
       </div>
     `;
   }
 
   private renderContributionRow(c: FundContribution): string {
+    const entryType = c.type ?? 'income';
+    const isExpense = entryType === 'expense';
+    const lunar = solarISOToLunar(c.dateISO);
+
     if (this.editingContributionId === c.id) {
       const members = this.store.getState().members;
       return `
         <form class="inline-edit-box" data-action="save-contribution-edit" data-id="${c.id}">
-          <div class="inline-edit-title">Chỉnh sửa khoản đóng góp quỹ</div>
+          <div class="inline-edit-title">Chỉnh sửa khoản quỹ gia tộc</div>
           <div class="inline-edit-grid">
             <div class="field-group">
-              <label class="field-label">Thành viên liên kết</label>
+              <label class="field-label">Loại khoản mục</label>
+              <select name="type" class="text-input">
+                <option value="income" ${!isExpense ? 'selected' : ''}>Đóng góp vào quỹ</option>
+                <option value="expense" ${isExpense ? 'selected' : ''}>Chi quỹ gia tộc</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Thành viên liên quan</label>
               <select name="memberId" class="text-input">
-                <option value="">-- Người đóng tự nhập --</option>
+                <option value="">-- Không chọn --</option>
                 ${members
                   .map(
                     (m) =>
@@ -1673,12 +1653,12 @@ export class FamilyLedgerApp2D {
                   .join('')}
               </select>
             </div>
-            <div class="field-group">
-              <label class="field-label">Tên người đóng góp</label>
+            <div class="field-group span-2">
+              <label class="field-label">Tên người đóng / Nội dung khoản chi</label>
               <input type="text" name="contributorName" class="text-input" value="${escapeHtml(c.contributorName)}" required maxlength="56" />
             </div>
             <div class="field-group">
-              <label class="field-label">Ngày đóng</label>
+              <label class="field-label">Ngày ghi nhận</label>
               <input type="date" name="dateISO" class="text-input tabular" value="${escapeHtml(c.dateISO)}" required />
             </div>
             <div class="field-group">
@@ -1699,12 +1679,15 @@ export class FamilyLedgerApp2D {
     }
 
     return `
-      <article class="event-row urgency-attended">
+      <article class="event-row ${isExpense ? 'urgency-far' : 'urgency-attended'}">
         <div class="event-main">
           <div class="event-meta-line">
-            <span class="meta-urgency urgency-text-attended">Đóng góp quỹ</span>
+            <span class="meta-urgency ${isExpense ? 'urgency-text-urgent' : 'urgency-text-attended'}">
+              ${isExpense ? 'Chi gia tộc' : 'Đóng góp quỹ'}
+            </span>
             <span aria-hidden="true">·</span>
             <span class="tabular">${escapeHtml(formatDateVN(c.dateISO))}</span>
+            <span class="meta-lunar tabular">(${escapeHtml(formatLunarShort(lunar))})</span>
             ${
               c.note
                 ? `<span aria-hidden="true">·</span><span>${escapeHtml(c.note)}</span>`
@@ -1714,7 +1697,9 @@ export class FamilyLedgerApp2D {
           <h3 class="event-title">${escapeHtml(c.contributorName)}</h3>
         </div>
         <div class="event-right">
-          <span class="amount-display tabular text-positive">+${escapeHtml(formatVND(c.amount))}</span>
+          <span class="amount-display tabular ${isExpense ? 'text-danger' : 'text-positive'}">
+            ${isExpense ? '-' : '+'}${escapeHtml(formatVND(c.amount))}
+          </span>
           <div class="event-actions">
             <button type="button" class="btn-edit" data-action="start-edit-contribution" data-id="${c.id}">Sửa</button>
             <button type="button" class="btn-delete" data-action="delete-contribution" data-id="${c.id}">Xóa</button>
@@ -1766,10 +1751,9 @@ export class FamilyLedgerApp2D {
 
     const smallFamilyCount = members.filter((m) => m.branch === 'gia_dinh').length;
     const extendedCount = members.length - smallFamilyCount;
-    const totalMemberContribs = state.contributions.reduce(
-      (acc, c) => acc + c.amount,
-      0
-    );
+    const totalMemberContribs = state.contributions
+      .filter((c) => c.type !== 'expense')
+      .reduce((acc, c) => acc + c.amount, 0);
 
     const branchFilters: Array<{id: 'all' | FamilyBranch; label: string}> = [
       {id: 'all', label: `Tất cả (${members.length})`},
@@ -2025,7 +2009,7 @@ export class FamilyLedgerApp2D {
 
     const state = this.store.getState();
     const contributed = state.contributions
-      .filter((c) => c.memberId === m.id)
+      .filter((c) => c.memberId === m.id && c.type !== 'expense')
       .reduce((acc, c) => acc + c.amount, 0);
     const assignedCount = state.events.filter((e) => e.assigneeId === m.id).length;
 
@@ -2182,8 +2166,9 @@ export class FamilyLedgerApp2D {
     const member = this.store.getMemberById(memberId);
     const contributorName =
       (nameInput?.value ?? this.draftContribName).trim() ||
-      member?.name ||
-      'Thành viên gia đình';
+      (this.draftContribType === 'expense'
+        ? 'Khoản chi quỹ gia tộc'
+        : member?.name || 'Thành viên gia đình');
     const dateISO = dateInput?.value || this.draftContribDateISO;
     const parsedAmt = Number((amountInput?.value ?? '').replace(/[^\d]/g, ''));
     const amount =
@@ -2193,6 +2178,7 @@ export class FamilyLedgerApp2D {
     const note = (noteInput?.value ?? this.draftContribNote).trim();
 
     this.store.addContribution({
+      type: this.draftContribType,
       memberId,
       contributorName,
       dateISO,
@@ -2206,7 +2192,9 @@ export class FamilyLedgerApp2D {
     this.audio.playComplete();
     this.render();
     this.showToast(
-      `Đã ghi đóng góp quỹ +${formatVND(amount)} từ ${contributorName}.`
+      this.draftContribType === 'expense'
+        ? `Đã ghi khoản chi quỹ gia tộc -${formatVND(amount)} (${contributorName}).`
+        : `Đã ghi đóng góp quỹ gia tộc +${formatVND(amount)} từ ${contributorName}.`
     );
   }
 
@@ -2404,7 +2392,9 @@ export class FamilyLedgerApp2D {
     ctbMember?.addEventListener('change', () => {
       this.draftContribMemberId = ctbMember.value;
       const member = this.store.getMemberById(ctbMember.value);
-      if (member) this.draftContribName = member.name;
+      if (member && this.draftContribType === 'income') {
+        this.draftContribName = member.name;
+      }
       this.render();
     });
 
@@ -2521,19 +2511,27 @@ export class FamilyLedgerApp2D {
           const id = form.dataset.id;
           if (!id) return;
           const fd = new FormData(form);
+          const entryType =
+            (String(fd.get('type') ?? 'income') as 'income' | 'expense') ||
+            'income';
           const memberId = String(fd.get('memberId') ?? '');
           const typedName = String(fd.get('contributorName') ?? '').trim();
           const member = this.store.getMemberById(memberId);
           this.editingContributionId = null;
           this.store.updateContribution(id, {
+            type: entryType,
             memberId,
-            contributorName: typedName || member?.name || 'Thành viên gia đình',
+            contributorName:
+              typedName ||
+              (entryType === 'expense'
+                ? 'Khoản chi quỹ gia tộc'
+                : member?.name || 'Thành viên gia đình'),
             dateISO: String(fd.get('dateISO') ?? ''),
             amount: Number(fd.get('amount') ?? 0),
             note: String(fd.get('note') ?? ''),
           });
           this.audio.playComplete();
-          this.showToast('Đã lưu thay đổi khoản đóng góp quỹ.');
+          this.showToast('Đã lưu thay đổi khoản quỹ gia tộc.');
         });
       });
 
@@ -2663,7 +2661,7 @@ export class FamilyLedgerApp2D {
             if (!id) return;
             this.store.setEventStatus(id, 'attended');
             this.audio.playComplete();
-            this.showToast('Đã đánh dấu "Đã đi" và cập nhật số tiền quỹ còn lại.');
+            this.showToast('Đã đánh dấu "Đã đi" và cập nhật Quỹ cá nhân.');
             break;
           }
           case 'set-draft-cal-mode': {
@@ -2789,7 +2787,7 @@ export class FamilyLedgerApp2D {
             this.audio.playTap(340);
             this.showToast(
               next === 'skipped'
-                ? 'Đã đánh dấu "Không đi" (hoàn vào tiền quỹ còn lại).'
+                ? 'Đã đánh dấu "Không đi" (hoàn vào Quỹ cá nhân còn lại).'
                 : 'Đã mở lại lịch đi đám.'
             );
             break;
@@ -2878,7 +2876,22 @@ export class FamilyLedgerApp2D {
             this.showToast('Đã xóa khoản thu chi khỏi quỹ cá nhân.');
             break;
           }
-          // --- Fund Page Actions ---
+          // --- Fund Page Actions (Standalone Quỹ gia tộc) ---
+          case 'select-contrib-type': {
+            const nextType = el.dataset.type as 'income' | 'expense';
+            if (!nextType) return;
+            this.draftContribType = nextType;
+            this.audio.playTap(480);
+            this.render();
+            break;
+          }
+          case 'set-clan-fund-filter': {
+            this.clanFundFilter =
+              (el.dataset.filter as 'all' | 'income' | 'expense') ?? 'all';
+            this.audio.playTap(460);
+            this.render();
+            break;
+          }
           case 'select-contrib-amount': {
             this.draftContribAmount = Number(el.dataset.amount ?? 0);
             this.audio.playTap(520);
