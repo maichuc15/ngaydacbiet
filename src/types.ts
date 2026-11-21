@@ -1,4 +1,6 @@
-export type AppPage = 'calendar' | 'fund' | 'family';
+export type AppPage = 'calendar' | 'personal' | 'fund' | 'family';
+
+export type CalendarMode = 'solar' | 'lunar';
 
 export type EventPriority = 'important' | 'normal';
 
@@ -15,8 +17,10 @@ export type FamilyBranch = 'gia_dinh' | 'ben_noi' | 'ben_ngoai' | 'chi_ho';
 export interface FamilyEvent {
   id: string;
   title: string;
-  /** Local date formatted as YYYY-MM-DD */
+  /** Local Gregorian date formatted as YYYY-MM-DD */
   dateISO: string;
+  /** Indicates whether user prefers tracking this event by lunar or solar date */
+  calendarType?: CalendarMode;
   category: EventCategory;
   priority: EventPriority;
   /** Contribution / expense amount in VND */
@@ -44,11 +48,35 @@ export interface FamilyMember {
   note: string;
 }
 
+export type PersonalTransactionType = 'income' | 'expense';
+
+export interface PersonalTransaction {
+  id: string;
+  type: PersonalTransactionType;
+  title: string;
+  dateISO: string;
+  amount: number;
+  note: string;
+}
+
+export interface PersonalFundSummary {
+  baseBudget: number;
+  totalIncome: number;
+  totalAvailable: number;
+  totalExpense: number;
+  remaining: number;
+  incomeCount: number;
+  expenseCount: number;
+}
+
 export interface AppState {
-  /** Base annual fund budget set by family */
+  /** Base annual clan fund budget set by family */
   fundBudget: number;
+  /** Base personal fund budget set by user */
+  personalFundBudget: number;
   events: FamilyEvent[];
   contributions: FundContribution[];
+  personalTransactions: PersonalTransaction[];
   members: FamilyMember[];
   filter: FilterMode;
   selectedEventId: string | null;

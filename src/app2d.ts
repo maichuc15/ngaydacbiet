@@ -1,5 +1,15 @@
 import {ChimeSynthesizer} from './audio/ChimeSynthesizer.ts';
 import {
+  formatLunarFull,
+  formatLunarShort,
+  getCanChiDay,
+  getCanChiYear,
+  getLeapMonthOfYear,
+  lunarToSolarISO,
+  solarISOToLunar,
+  solarToLunar,
+} from './lunar.ts';
+import {
   FamilyLedgerStore,
   addDaysISO,
   formatCompactVND,
@@ -7,6 +17,7 @@ import {
   formatTodayHeaderVN,
   formatVND,
   getDaysUntil,
+  toLocalDateISO,
 } from './store.ts';
 import {
   AMOUNT_PRESETS,
@@ -15,6 +26,7 @@ import {
   BRANCH_LABELS,
   CATEGORY_LABELS,
   CONTRIBUTION_PRESETS,
+  CalendarMode,
   EventCategory,
   EventPriority,
   FamilyBranch,
@@ -23,6 +35,8 @@ import {
   FilterMode,
   FundContribution,
   PRIORITY_LABELS,
+  PersonalTransaction,
+  PersonalTransactionType,
   QUICK_TITLE_TEMPLATES,
   RELATION_PRESETS,
   STATUS_LABELS,
@@ -66,10 +80,11 @@ function getRowUrgency(ev: FamilyEvent, now = new Date()): RowUrgencyMeta {
 }
 
 /**
- * 2D Vietnamese multi-page application controller for "Sổ Giỗ Chạp Gia Đình":
- * - Trang 1: Lịch đám (Nhắc việc hàng ngày, ghi nhanh, tick hoàn thành, chỉnh sửa)
- * - Trang 2: Quỹ đám (Ngân sách quỹ, đóng góp quỹ, bảng kê thu chi, chỉnh sửa)
- * - Trang 3: Gia đình (Danh sách thành viên gia đình / gia tộc, thêm & chỉnh sửa)
+ * 2D Vietnamese 4-page application controller for "Sổ Giỗ Chạp Gia Đình":
+ * - Trang 1: Lịch đám (Nhắc việc hàng ngày, ghi nhanh theo Dương/Âm lịch, tick hoàn thành, chỉnh sửa)
+ * - Trang 2: Lịch âm (Lịch tháng Âm–Dương Việt Nam, chi tiết ngày Can Chi, đổi ngày Âm↔Dương)
+ * - Trang 3: Quỹ đám (Ngân sách quỹ, đóng góp quỹ, bảng kê thu chi, chỉnh sửa)
+ * - Trang 4: Gia đình (Danh sách thành viên gia đình / gia tộc, thêm & chỉnh sửa)
  */
 export class FamilyLedgerApp2D {
   private readonly root: HTMLElement;
@@ -82,12 +97,30 @@ export class FamilyLedgerApp2D {
   // --- Calendar page draft & edit states ---
   private draftTitle = '';
   private draftDateISO = addDaysISO(new Date(), 0);
+  private draftCalendarMode: CalendarMode = 'solar';
+  private draftLunarDay: number;
+  private draftLunarMonth: number;
+  private draftLunarYear: number;
+  private draftLunarLeap: boolean;
   private draftCategory: EventCategory = 'gio';
   private draftPriority: EventPriority = 'important';
   private draftAmount = 500_000;
   private draftAssigneeId = '';
   private searchQuery = '';
   private editingEventId: string | null = null;
+  private editEventCalendarMode: CalendarMode = 'solar';
+  private reminderWindowDays: 3 | 7 | 14 | 30 = 14;
+  private dismissedReminderIds = new Set<string>();
+
+  // --- Personal fund page draft & edit states ---
+  private editingPersonalBaseFund = false;
+  private draftPersonalType: PersonalTransactionType = 'expense';
+  private draftPersonalTitle = '';
+  private draftPersonalDateISO = addDaysISO(new Date(), 0);
+  private draftPersonalAmount = 500_000;
+  private draftPersonalNote = '';
+  private personalFilter: 'all' | PersonalTransactionType = 'all';
+  private editingPersonalTxId: string | null = null;
 
   // --- Fund page draft & edit states ---
   private editingBaseFund = false;
@@ -115,8 +148,38 @@ export class FamilyLedgerApp2D {
 
   constructor(root: HTMLElement) {
     this.root = root;
+    const now = new Date();
+    const todayISO = toLocalDateISO(now);
+    const todayLunar = solarISOToLunar(todayISO);
+
+    this.draftLunarDay = todayLunar.day;
+    this.draftLunarMonth = todayLunar.month;
+    this.draftLunarYear = todayLunar.year;
+    this.draftLunarLeap = todayLunar.leap;
+
     this.store.subscribe(() => this.render());
     this.render();
+  }
+
+  private syncDraftLunarFromSolar(dateISO: string): void {
+    const l = solarISOToLunar(dateISO);
+    this.draftLunarDay = l.day;
+    this.draftLunarMonth = l.month;
+    this.draftLunarYear = l.year;
+    this.draftLunarLeap = l.leap;
+  }
+
+  private syncDraftSolarFromLunar(): void {
+    const leapMonth = getLeapMonthOfYear(this.draftLunarYear);
+    if (this.draftLunarLeap && leapMonth !== this.draftLunarMonth) {
+      this.draftLunarLeap = false;
+    }
+    this.draftDateISO = lunarToSolarISO(
+      this.draftLunarDay,
+      this.draftLunarMonth,
+      this.draftLunarYear,
+      this.draftLunarLeap
+    );
   }
 
   private showToast(msg: string): void {
@@ -133,13 +196,15 @@ export class FamilyLedgerApp2D {
       this.toastMessage = '';
       const el = this.root.querySelector<HTMLElement>('#app-toast');
       if (el) el.classList.remove('is-visible');
-    }, 3200);
+    }, 3400);
   }
 
   private switchPage(page: AppPage): void {
     if (this.activePage === page) return;
     this.activePage = page;
     this.editingEventId = null;
+    this.editingPersonalTxId = null;
+    this.editingPersonalBaseFund = false;
     this.editingContributionId = null;
     this.editingFundEventId = null;
     this.editingMemberId = null;
@@ -152,13 +217,16 @@ export class FamilyLedgerApp2D {
     const now = new Date();
     const pages: Array<{id: AppPage; label: string}> = [
       {id: 'calendar', label: 'Lịch đám'},
-      {id: 'fund', label: 'Quỹ đám'},
+      {id: 'personal', label: 'Quỹ cá nhân'},
+      {id: 'fund', label: 'Quỹ gia tộc'},
       {id: 'family', label: 'Gia đình'},
     ];
 
     let pageHtml = '';
     if (this.activePage === 'calendar') {
       pageHtml = this.renderCalendarPage(now);
+    } else if (this.activePage === 'personal') {
+      pageHtml = this.renderPersonalFundPage();
     } else if (this.activePage === 'fund') {
       pageHtml = this.renderFundPage(now);
     } else {
@@ -201,7 +269,7 @@ export class FamilyLedgerApp2D {
           ${pageHtml}
         </main>
 
-        <!-- Mobile Thumb-Zone Bottom Tab Bar -->
+        <!-- Mobile Thumb-Zone Bottom Tab Bar (4 tabs) -->
         <nav class="mobile-tabbar" aria-label="Thanh chuyển trang di động">
           <button
             type="button"
@@ -220,6 +288,19 @@ export class FamilyLedgerApp2D {
 
           <button
             type="button"
+            class="mobile-tab ${this.activePage === 'personal' ? 'is-active' : ''}"
+            data-action="nav-page"
+            data-page="personal"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"></path>
+              <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"></path>
+            </svg>
+            <span>Quỹ cá nhân</span>
+          </button>
+
+          <button
+            type="button"
             class="mobile-tab ${this.activePage === 'fund' ? 'is-active' : ''}"
             data-action="nav-page"
             data-page="fund"
@@ -228,7 +309,7 @@ export class FamilyLedgerApp2D {
               <rect x="2" y="5" width="20" height="14" rx="2"></rect>
               <line x1="2" y1="10" x2="22" y2="10"></line>
             </svg>
-            <span>Quỹ đám</span>
+            <span>Quỹ gia tộc</span>
           </button>
 
           <button
@@ -262,8 +343,14 @@ export class FamilyLedgerApp2D {
   private renderCalendarPage(now: Date): string {
     const state = this.store.getState();
     const summary = this.store.computeSummary();
-    const review = this.store.getDailyReviewHeadline();
     const visibleEvents = this.getFilteredEvents();
+    const todayLunar = solarToLunar(
+      now.getDate(),
+      now.getMonth() + 1,
+      now.getFullYear()
+    );
+    const draftLunarPreview = solarISOToLunar(this.draftDateISO);
+    const draftLeapMonth = getLeapMonthOfYear(this.draftLunarYear);
 
     const fundRatio =
       summary.fundBudget > 0
@@ -304,80 +391,98 @@ export class FamilyLedgerApp2D {
       {label: '+30 ngày', iso: addDaysISO(now, 30)},
     ];
 
+    const baseYear = now.getFullYear();
+    const lunarYears = [
+      baseYear - 1,
+      baseYear,
+      baseYear + 1,
+      baseYear + 2,
+      baseYear + 3,
+    ];
+
     return `
-      <!-- Daily Review Banner -->
-      <section class="daily-banner severity-${review.severity}" aria-label="Thông báo ngày đám hôm nay">
-        <div class="daily-banner-content">
-          <div class="daily-kicker">
-            ${escapeHtml(formatTodayHeaderVN(now))} · ${upcomingIn7.length} đám trong 7 ngày tới
+      <!-- Top Quỹ Gia Tộc Section -->
+      <section class="clan-fund-card" aria-label="Quỹ gia tộc">
+        <div class="clan-fund-header">
+          <div>
+            <h1 class="clan-fund-title">Quỹ gia tộc</h1>
+            <p class="clan-fund-sub tabular">
+              ${escapeHtml(formatTodayHeaderVN(now))} · ${escapeHtml(formatLunarShort(todayLunar))} (${escapeHtml(getCanChiYear(todayLunar.year))}) · ${upcomingIn7.length} đám trong 7 ngày tới
+            </p>
           </div>
-          <h1 class="daily-title">${escapeHtml(review.title)}</h1>
-          <p class="daily-detail">${escapeHtml(review.detail)}</p>
+          <div class="clan-fund-actions">
+            <button type="button" class="btn-secondary-sm" data-action="nav-page" data-page="fund">
+              Quản lý quỹ gia tộc
+            </button>
+          </div>
         </div>
-        <div class="daily-banner-actions">
-          ${
-            review.focusEvent
-              ? `<button type="button" class="btn-attend-hero" data-action="quick-attend-focus" data-id="${review.focusEvent.id}">
-                  Đánh dấu đã đi
-                </button>`
-              : ''
-          }
+
+        <div class="kpi-strip clan-kpi-strip" aria-label="Báo cáo quỹ gia tộc và lịch tham dự">
+          <div class="kpi-cell">
+            <div class="kpi-label-row">
+              <span class="kpi-label">Tổng quỹ gia tộc</span>
+              <div class="kpi-inline-tools">
+                <button type="button" class="btn-micro" data-action="fund-delta" data-delta="-1000000">-1tr</button>
+                <button type="button" class="btn-micro" data-action="fund-delta" data-delta="1000000">+1tr</button>
+                <button type="button" class="btn-micro" data-action="toggle-edit-base-fund">${this.editingBaseFund ? 'Đóng' : 'Sửa'}</button>
+              </div>
+            </div>
+            ${
+              this.editingBaseFund
+                ? `<form class="inline-fund-form" id="base-fund-edit-form">
+                    <input type="number" id="base-fund-input" class="inline-num-input tabular" min="0" step="100000" value="${summary.baseFundBudget}" aria-label="Nhập số tiền quỹ gốc đầu năm" />
+                    <button type="submit" class="btn-micro-save">Lưu</button>
+                  </form>`
+                : `<div class="kpi-value tabular text-positive">${escapeHtml(formatVND(summary.fundBudget))}</div>`
+            }
+            <div class="kpi-sub tabular">
+              Quỹ gốc ${escapeHtml(formatCompactVND(summary.baseFundBudget))} · Đóng góp ${escapeHtml(formatCompactVND(summary.totalContributions))}
+            </div>
+          </div>
+
+          <div class="kpi-cell">
+            <span class="kpi-label">Tổng tiền đám</span>
+            <div class="kpi-value tabular">${escapeHtml(formatVND(summary.totalActiveAmount))}</div>
+            <div class="kpi-sub tabular">
+              Đã đi ${escapeHtml(formatCompactVND(summary.totalSpent))} · Dự chi ${escapeHtml(formatCompactVND(summary.totalUpcomingAmount))}
+            </div>
+          </div>
+
+          <div class="kpi-cell">
+            <span class="kpi-label">Quỹ gia tộc còn lại</span>
+            <div class="kpi-value tabular ${summary.remainingFund < 0 ? 'text-danger' : 'text-positive'}">
+              ${escapeHtml(formatVND(summary.remainingFund))}
+            </div>
+            <div class="fund-meter" aria-hidden="true">
+              <div class="fund-meter-fill ${summary.remainingFund < 0 ? 'is-over' : ''}" style="width: ${fundRatio}%"></div>
+            </div>
+            <div class="kpi-sub">
+              ${summary.remainingFund >= 0 ? `Đã dùng ${fundRatio}% quỹ gia tộc` : 'Đang vượt quỹ · Nên bổ sung thêm'}
+            </div>
+          </div>
+
+          <div class="kpi-cell">
+            <div class="kpi-label-row">
+              <span class="kpi-label">Báo cáo đi / không đi</span>
+              <button type="button" class="btn-micro" data-action="nav-page" data-page="personal">Quỹ cá nhân</button>
+            </div>
+            <div class="kpi-value tabular">${summary.attendedCount} đã đi · ${summary.skippedCount} không đi</div>
+            <div class="kpi-sub tabular">
+              ${summary.pendingCount} ngày sắp tới · ${summary.urgentCount} ngày gấp
+            </div>
+          </div>
         </div>
       </section>
 
-      <!-- 4-Column Financial & Attendance Report Strip -->
-      <section class="kpi-strip" aria-label="Báo cáo quỹ đám và lịch tham dự">
-        <div class="kpi-cell">
-          <div class="kpi-label-row">
-            <span class="kpi-label">Tiền quỹ đám</span>
-            <button type="button" class="btn-micro" data-action="nav-page" data-page="fund">Chi tiết quỹ</button>
-          </div>
-          <div class="kpi-value tabular">${escapeHtml(formatVND(summary.fundBudget))}</div>
-          <div class="kpi-sub tabular">
-            Quỹ gốc ${escapeHtml(formatCompactVND(summary.baseFundBudget))} · Đóng góp ${escapeHtml(formatCompactVND(summary.totalContributions))}
-          </div>
-        </div>
-
-        <div class="kpi-cell">
-          <span class="kpi-label">Tổng tiền đám</span>
-          <div class="kpi-value tabular">${escapeHtml(formatVND(summary.totalActiveAmount))}</div>
-          <div class="kpi-sub tabular">
-            Đã đi ${escapeHtml(formatCompactVND(summary.totalSpent))} · Dự chi ${escapeHtml(formatCompactVND(summary.totalUpcomingAmount))}
-          </div>
-        </div>
-
-        <div class="kpi-cell">
-          <span class="kpi-label">Tiền quỹ còn lại</span>
-          <div class="kpi-value tabular ${summary.remainingFund < 0 ? 'text-danger' : 'text-positive'}">
-            ${escapeHtml(formatVND(summary.remainingFund))}
-          </div>
-          <div class="fund-meter" aria-hidden="true">
-            <div class="fund-meter-fill ${summary.remainingFund < 0 ? 'is-over' : ''}" style="width: ${fundRatio}%"></div>
-          </div>
-          <div class="kpi-sub">
-            ${summary.remainingFund >= 0 ? `Đã dùng ${fundRatio}% quỹ năm` : 'Đang vượt quỹ · Nên bổ sung thêm'}
-          </div>
-        </div>
-
-        <div class="kpi-cell">
-          <div class="kpi-label-row">
-            <span class="kpi-label">Báo cáo đi / không đi</span>
-            <button type="button" class="btn-micro" data-action="nav-page" data-page="family">${state.members.length} thành viên</button>
-          </div>
-          <div class="kpi-value tabular">${summary.attendedCount} đã đi · ${summary.skippedCount} không đi</div>
-          <div class="kpi-sub tabular">
-            ${summary.pendingCount} ngày sắp tới · ${summary.urgentCount} ngày gấp
-          </div>
-        </div>
-      </section>
+      ${this.renderUpcomingRemindersSection(now)}
 
       <!-- Main 2-Column Workspace -->
       <div class="workspace-grid">
-        <!-- Left Column: Quick Add Task -->
+        <!-- Left Column: Quick Add Task (Solar or Lunar Date) -->
         <section class="panel-surface quick-add-panel" aria-label="Ghi nhanh ngày đám">
           <div class="panel-header">
             <h2 class="panel-title">Ghi nhanh ngày đám</h2>
-            <span class="panel-hint">Chạm mẫu hoặc nhập tên</span>
+            <span class="panel-hint">Hỗ trợ Dương & Âm lịch</span>
           </div>
 
           <form id="quick-add-form" class="quick-add-form" novalidate>
@@ -407,26 +512,98 @@ export class FamilyLedgerApp2D {
             </div>
 
             <div class="field-group">
-              <label class="field-label" for="qa-date">Ngày diễn ra</label>
+              <div class="field-label-split">
+                <label class="field-label" for="qa-date">Ngày diễn ra (Dương &amp; Âm lịch)</label>
+                <div class="mode-switch" role="group" aria-label="Ưu tiên theo kiểu lịch">
+                  <button
+                    type="button"
+                    class="mode-btn ${this.draftCalendarMode === 'solar' ? 'is-active' : ''}"
+                    data-action="set-draft-cal-mode"
+                    data-mode="solar"
+                  >Dương lịch</button>
+                  <button
+                    type="button"
+                    class="mode-btn ${this.draftCalendarMode === 'lunar' ? 'is-active' : ''}"
+                    data-action="set-draft-cal-mode"
+                    data-mode="lunar"
+                  >Âm lịch</button>
+                </div>
+              </div>
+
               <input
                 id="qa-date"
                 type="date"
                 class="text-input tabular"
                 value="${escapeHtml(this.draftDateISO)}"
               />
-              <div class="button-row-wrap" role="group" aria-label="Chọn nhanh ngày">
-                ${dateQuickPresets
-                  .map(
-                    (p) => `
-                      <button
-                        type="button"
-                        class="seg-btn ${this.draftDateISO === p.iso ? 'is-active' : ''}"
-                        data-action="select-date-preset"
-                        data-date="${p.iso}"
-                      >${escapeHtml(p.label)}</button>
-                    `
-                  )
-                  .join('')}
+
+              <div class="qa-lunar-box" aria-label="Chọn ngày theo Lịch âm">
+                <div class="qa-lunar-box-head">
+                  <span class="qa-lunar-tag">Lịch âm</span>
+                  <span class="qa-lunar-canchi tabular">
+                    ${escapeHtml(formatLunarFull(draftLunarPreview))} · Ngày ${escapeHtml(getCanChiDay(draftLunarPreview.jd))}
+                  </span>
+                </div>
+                <div class="lunar-picker-row">
+                  <select id="qa-lunar-day" class="text-input tabular" aria-label="Ngày âm lịch">
+                    ${Array.from({length: 30}, (_, i) => i + 1)
+                      .map(
+                        (d) =>
+                          `<option value="${d}" ${this.draftLunarDay === d ? 'selected' : ''}>${d <= 10 ? `Mùng ${d}` : `Ngày ${d}`}</option>`
+                      )
+                      .join('')}
+                  </select>
+                  <select id="qa-lunar-month" class="text-input tabular" aria-label="Tháng âm lịch">
+                    ${Array.from({length: 12}, (_, i) => i + 1)
+                      .map(
+                        (m) =>
+                          `<option value="${m}" ${this.draftLunarMonth === m ? 'selected' : ''}>${m === 1 ? 'Tháng Giêng' : m === 12 ? 'Tháng Chạp' : `Tháng ${m}`} ÂL</option>`
+                      )
+                      .join('')}
+                  </select>
+                  <select id="qa-lunar-year" class="text-input tabular" aria-label="Năm âm lịch">
+                    ${lunarYears
+                      .map(
+                        (y) =>
+                          `<option value="${y}" ${this.draftLunarYear === y ? 'selected' : ''}>${y} (${escapeHtml(getCanChiYear(y))})</option>`
+                      )
+                      .join('')}
+                  </select>
+                </div>
+                ${
+                  draftLeapMonth === this.draftLunarMonth
+                    ? `<label class="checkbox-inline">
+                        <input type="checkbox" id="qa-lunar-leap" ${this.draftLunarLeap ? 'checked' : ''} />
+                        <span>Tháng ${this.draftLunarMonth} nhuận năm ${this.draftLunarYear}</span>
+                      </label>`
+                    : ''
+                }
+                <div class="button-row-wrap" role="group" aria-label="Chọn nhanh ngày âm dương">
+                  ${dateQuickPresets
+                    .map(
+                      (p) => `
+                        <button
+                          type="button"
+                          class="seg-btn ${this.draftDateISO === p.iso ? 'is-active' : ''}"
+                          data-action="select-date-preset"
+                          data-date="${p.iso}"
+                        >${escapeHtml(p.label)}</button>
+                      `
+                    )
+                    .join('')}
+                  <button
+                    type="button"
+                    class="seg-btn ${this.draftLunarDay === 1 ? 'is-active' : ''}"
+                    data-action="select-lunar-day-preset"
+                    data-day="1"
+                  >Mùng 1 ÂL</button>
+                  <button
+                    type="button"
+                    class="seg-btn ${this.draftLunarDay === 15 ? 'is-active' : ''}"
+                    data-action="select-lunar-day-preset"
+                    data-day="15"
+                  >Ngày Rằm</button>
+                </div>
               </div>
             </div>
 
@@ -526,7 +703,7 @@ export class FamilyLedgerApp2D {
                 id="search-events"
                 type="search"
                 class="search-input"
-                placeholder="Tìm tên đám hoặc ngày..."
+                placeholder="Tìm tên đám, ngày dương/âm..."
                 value="${escapeHtml(this.searchQuery)}"
                 aria-label="Tìm kiếm ngày đám"
               />
@@ -556,12 +733,184 @@ export class FamilyLedgerApp2D {
     `;
   }
 
+  private renderUpcomingRemindersSection(now: Date): string {
+    const state = this.store.getState();
+    const pendingSorted = state.events
+      .filter((e) => e.status === 'pending')
+      .map((ev) => ({ev, days: getDaysUntil(ev.dateISO, now)}))
+      .sort((a, b) => a.days - b.days);
+
+    const inWindow = pendingSorted.filter(
+      (item) => item.days <= this.reminderWindowDays
+    );
+    const activeReminders = inWindow.filter(
+      (item) => !this.dismissedReminderIds.has(item.ev.id)
+    );
+    const dismissedCount = inWindow.length - activeReminders.length;
+    const totalReminderAmount = activeReminders.reduce(
+      (sum, item) => sum + item.ev.amount,
+      0
+    );
+    const urgentReminderCount = activeReminders.filter(
+      (item) => item.days <= 3
+    ).length;
+
+    const windows: ReadonlyArray<3 | 7 | 14 | 30> = [3, 7, 14, 30];
+    const hasLaterPending = pendingSorted.some(
+      (item) => item.days > this.reminderWindowDays
+    );
+
+    const subtitle =
+      activeReminders.length > 0
+        ? `${activeReminders.length} ngày sắp đến trong ${this.reminderWindowDays} ngày tới${urgentReminderCount > 0 ? ` · ${urgentReminderCount} ngày gấp (≤ 3 ngày)` : ''} · Dự chi ${formatVND(totalReminderAmount)}`
+        : `Không có ngày giỗ hoặc đám nào cần nhắc trong ${this.reminderWindowDays} ngày tới`;
+
+    const rowsHtml = activeReminders
+      .map(({ev, days}) => {
+        const lunar = solarISOToLunar(ev.dateISO);
+        const assignee = this.store.getMemberById(ev.assigneeId);
+        const level = days <= 3 ? 'urgent' : days <= 14 ? 'soon' : 'far';
+        const countdownMain =
+          days < 0
+            ? `Quá ${Math.abs(days)} ngày`
+            : days === 0
+              ? 'Hôm nay'
+              : days === 1
+                ? 'Ngày mai'
+                : `Còn ${days} ngày`;
+        const countdownSub =
+          days <= 0
+            ? 'Cần đi ngay'
+            : days <= 3
+              ? 'Sắp đến · Gấp'
+              : days <= 14
+                ? 'Chuẩn bị sớm'
+                : 'Lịch sắp tới';
+
+        return `
+          <article class="reminder-row is-${level}">
+            <div class="reminder-countdown is-${level}">
+              <span class="reminder-countdown-main tabular">${escapeHtml(countdownMain)}</span>
+              <span class="reminder-countdown-sub">${escapeHtml(countdownSub)}</span>
+            </div>
+
+            <div class="reminder-main">
+              <h3 class="reminder-title">${escapeHtml(ev.title)}</h3>
+              <div class="event-meta-line">
+                <span class="tabular">${escapeHtml(formatDateVN(ev.dateISO))}</span>
+                <span class="meta-lunar tabular">(${escapeHtml(formatLunarShort(lunar))})</span>
+                <span aria-hidden="true">·</span>
+                <span>${escapeHtml(CATEGORY_LABELS[ev.category])}</span>
+                <span aria-hidden="true">·</span>
+                <span class="${ev.priority === 'important' ? 'urgency-text-urgent' : ''}">
+                  ${escapeHtml(PRIORITY_LABELS[ev.priority])}
+                </span>
+                ${
+                  assignee
+                    ? `<span aria-hidden="true">·</span><span class="meta-assignee">Đại diện: ${escapeHtml(assignee.name)}</span>`
+                    : ''
+                }
+              </div>
+            </div>
+
+            <div class="reminder-right">
+              <div class="amount-display tabular">${escapeHtml(formatVND(ev.amount))}</div>
+              <div class="event-actions">
+                <button
+                  type="button"
+                  class="btn-status-attend"
+                  data-action="toggle-attend"
+                  data-id="${ev.id}"
+                >Đã đi</button>
+                <button
+                  type="button"
+                  class="btn-status-skip"
+                  data-action="toggle-skip"
+                  data-id="${ev.id}"
+                >Không đi</button>
+                <button
+                  type="button"
+                  class="btn-text-subtle"
+                  data-action="dismiss-reminder"
+                  data-id="${ev.id}"
+                >Ẩn nhắc</button>
+              </div>
+            </div>
+          </article>
+        `;
+      })
+      .join('');
+
+    return `
+      <section id="upcoming-reminders-section" class="reminder-panel ${urgentReminderCount > 0 ? 'has-urgent' : ''}" aria-label="Thông báo nhắc nhở những ngày gần đến">
+        <div class="reminder-header">
+          <div class="reminder-heading-group">
+            <h2 class="panel-title">Thông báo nhắc nhở ngày gần đến</h2>
+            <p class="reminder-subtitle tabular">${escapeHtml(subtitle)}</p>
+          </div>
+
+          <div class="reminder-controls">
+            <div class="mode-switch" role="group" aria-label="Chọn khoảng thời gian nhắc nhở">
+              ${windows
+                .map(
+                  (w) => `
+                    <button
+                      type="button"
+                      class="mode-btn tabular ${this.reminderWindowDays === w ? 'is-active' : ''}"
+                      data-action="set-reminder-window"
+                      data-days="${w}"
+                    >${w} ngày</button>
+                  `
+                )
+                .join('')}
+            </div>
+
+            <button
+              type="button"
+              class="btn-secondary-sm"
+              data-action="trigger-reminder"
+            >Chuông nhắc</button>
+
+            ${
+              dismissedCount > 0
+                ? `<button
+                    type="button"
+                    class="btn-text-subtle"
+                    data-action="restore-reminders"
+                  >Hiện lại (${dismissedCount})</button>`
+                : ''
+            }
+          </div>
+        </div>
+
+        ${
+          activeReminders.length === 0
+            ? `<div class="reminder-empty">
+                <span class="empty-sub">Hiện không có ngày đám nào cần nhắc trong ${this.reminderWindowDays} ngày tới.</span>
+                ${
+                  hasLaterPending && this.reminderWindowDays < 30
+                    ? `<button
+                        type="button"
+                        class="btn-micro"
+                        data-action="set-reminder-window"
+                        data-days="30"
+                      >Xem lịch 30 ngày tới</button>`
+                    : ''
+                }
+              </div>`
+            : `<div class="reminder-list">${rowsHtml}</div>`
+        }
+      </section>
+    `;
+  }
+
   private renderEventRow(ev: FamilyEvent, now: Date): string {
     const urgency = getRowUrgency(ev, now);
     const isAttended = ev.status === 'attended';
     const isSkipped = ev.status === 'skipped';
     const isEditing = this.editingEventId === ev.id;
     const assignee = this.store.getMemberById(ev.assigneeId);
+    const lunar = solarISOToLunar(ev.dateISO);
 
     if (isEditing) {
       return this.renderEventInlineEditor(ev, 'calendar');
@@ -574,6 +923,7 @@ export class FamilyLedgerApp2D {
             <span class="meta-urgency urgency-text-${urgency.cls}">${escapeHtml(urgency.label)}</span>
             <span aria-hidden="true">·</span>
             <span class="tabular">${escapeHtml(formatDateVN(ev.dateISO))}</span>
+            <span class="meta-lunar tabular">(${escapeHtml(formatLunarShort(lunar))})</span>
             <span aria-hidden="true">·</span>
             <span>${escapeHtml(CATEGORY_LABELS[ev.category])}</span>
             <span aria-hidden="true">·</span>
@@ -644,19 +994,82 @@ export class FamilyLedgerApp2D {
       context === 'calendar' ? 'save-event-edit' : 'save-fund-event-edit';
     const cancelAction =
       context === 'calendar' ? 'cancel-edit-event' : 'cancel-fund-event-edit';
+    const lunar = solarISOToLunar(ev.dateISO);
+    const currentYear = new Date().getFullYear();
+    const years = [
+      currentYear - 1,
+      currentYear,
+      currentYear + 1,
+      currentYear + 2,
+      currentYear + 3,
+    ];
 
     return `
       <form class="inline-edit-box" data-action="${formAction}" data-id="${ev.id}">
-        <div class="inline-edit-title">Chỉnh sửa thông tin ngày đám</div>
+        <div class="inline-edit-header">
+          <div class="inline-edit-title">Chỉnh sửa thông tin ngày đám</div>
+          <div class="mode-switch" role="group" aria-label="Đổi kiểu lịch khi sửa">
+            <button
+              type="button"
+              class="mode-btn ${this.editEventCalendarMode === 'solar' ? 'is-active' : ''}"
+              data-action="set-edit-cal-mode"
+              data-mode="solar"
+            >Dương lịch</button>
+            <button
+              type="button"
+              class="mode-btn ${this.editEventCalendarMode === 'lunar' ? 'is-active' : ''}"
+              data-action="set-edit-cal-mode"
+              data-mode="lunar"
+            >Âm lịch</button>
+          </div>
+        </div>
         <div class="inline-edit-grid">
           <div class="field-group span-2">
             <label class="field-label">Tên ngày đám / ngày giỗ</label>
             <input type="text" name="title" class="text-input" value="${escapeHtml(ev.title)}" required maxlength="64" />
           </div>
-          <div class="field-group">
-            <label class="field-label">Ngày diễn ra</label>
-            <input type="date" name="dateISO" class="text-input tabular" value="${escapeHtml(ev.dateISO)}" required />
-          </div>
+
+          ${
+            this.editEventCalendarMode === 'solar'
+              ? `
+                <div class="field-group">
+                  <label class="field-label">Ngày Dương lịch (${escapeHtml(formatLunarShort(lunar))})</label>
+                  <input type="date" name="dateISO" class="text-input tabular" value="${escapeHtml(ev.dateISO)}" required />
+                </div>
+              `
+              : `
+                <div class="field-group span-2">
+                  <label class="field-label">Chọn theo Âm lịch (Dương lịch hiện tại: ${escapeHtml(formatDateVN(ev.dateISO))})</label>
+                  <div class="lunar-picker-row">
+                    <select name="lunarDay" class="text-input tabular">
+                      ${Array.from({length: 30}, (_, i) => i + 1)
+                        .map(
+                          (d) =>
+                            `<option value="${d}" ${lunar.day === d ? 'selected' : ''}>Ngày ${d}</option>`
+                        )
+                        .join('')}
+                    </select>
+                    <select name="lunarMonth" class="text-input tabular">
+                      ${Array.from({length: 12}, (_, i) => i + 1)
+                        .map(
+                          (m) =>
+                            `<option value="${m}" ${lunar.month === m ? 'selected' : ''}>Tháng ${m} ÂL</option>`
+                        )
+                        .join('')}
+                    </select>
+                    <select name="lunarYear" class="text-input tabular">
+                      ${years
+                        .map(
+                          (y) =>
+                            `<option value="${y}" ${lunar.year === y ? 'selected' : ''}>${y} (${escapeHtml(getCanChiYear(y))})</option>`
+                        )
+                        .join('')}
+                    </select>
+                  </div>
+                </div>
+              `
+          }
+
           <div class="field-group">
             <label class="field-label">Số tiền đám (đồng)</label>
             <input type="number" name="amount" class="text-input tabular" min="0" step="50000" value="${ev.amount}" required />
@@ -709,7 +1122,325 @@ export class FamilyLedgerApp2D {
   }
 
   // =========================================================================
-  // TRANG 2: QUỸ ĐÁM (FUND MANAGEMENT PAGE)
+  // TRANG 2: QUỸ CÁ NHÂN (PERSONAL FUND MANAGEMENT PAGE)
+  // =========================================================================
+  private renderPersonalFundPage(): string {
+    const state = this.store.getState();
+    const summary = this.store.computePersonalSummary();
+    const sortedTx = [...state.personalTransactions]
+      .filter(
+        (tx) => this.personalFilter === 'all' || tx.type === this.personalFilter
+      )
+      .sort((a, b) => b.dateISO.localeCompare(a.dateISO));
+
+    const usedRatio =
+      summary.totalAvailable > 0
+        ? Math.min(
+            100,
+            Math.round((summary.totalExpense / summary.totalAvailable) * 100)
+          )
+        : summary.totalExpense > 0
+          ? 100
+          : 0;
+
+    const draftPersonalLunar = solarISOToLunar(this.draftPersonalDateISO);
+    const personalPresets = [200_000, 500_000, 1_000_000, 2_000_000] as const;
+
+    const filterDefs: Array<{
+      id: 'all' | PersonalTransactionType;
+      label: string;
+      count: number;
+    }> = [
+      {id: 'all', label: 'Tất cả', count: state.personalTransactions.length},
+      {id: 'expense', label: 'Khoản chi', count: summary.expenseCount},
+      {id: 'income', label: 'Khoản nạp', count: summary.incomeCount},
+    ];
+
+    return `
+      <section class="page-intro">
+        <div>
+          <h1 class="page-heading">Quản lý Quỹ Cá Nhân</h1>
+          <p class="page-subheading">
+            Theo dõi khoản tiền đi đám, mừng cưới, hiếu hỷ riêng của bản thân tách biệt với quỹ chung gia tộc. Chạm "Sửa" để cập nhật nhanh bất kỳ khoản nào.
+          </p>
+        </div>
+      </section>
+
+      <!-- 4-Column Personal Fund KPI Strip -->
+      <section class="kpi-strip" aria-label="Tổng quan quỹ cá nhân">
+        <div class="kpi-cell">
+          <div class="kpi-label-row">
+            <span class="kpi-label">Ngân sách cá nhân gốc</span>
+            <div class="kpi-inline-tools">
+              <button type="button" class="btn-micro" data-action="personal-fund-delta" data-delta="-500000">-500k</button>
+              <button type="button" class="btn-micro" data-action="personal-fund-delta" data-delta="500000">+500k</button>
+              <button type="button" class="btn-micro" data-action="toggle-edit-personal-base">${this.editingPersonalBaseFund ? 'Đóng' : 'Sửa'}</button>
+            </div>
+          </div>
+          ${
+            this.editingPersonalBaseFund
+              ? `<form class="inline-fund-form" id="personal-base-edit-form">
+                  <input type="number" id="personal-base-input" class="inline-num-input tabular" min="0" step="100000" value="${summary.baseBudget}" aria-label="Nhập số tiền ngân sách cá nhân gốc" />
+                  <button type="submit" class="btn-micro-save">Lưu</button>
+                </form>`
+              : `<div class="kpi-value tabular">${escapeHtml(formatVND(summary.baseBudget))}</div>`
+          }
+          <div class="kpi-sub">Mức dự phòng ban đầu của riêng bạn</div>
+        </div>
+
+        <div class="kpi-cell">
+          <span class="kpi-label">Tổng quỹ cá nhân hiện có</span>
+          <div class="kpi-value tabular text-positive">${escapeHtml(formatVND(summary.totalAvailable))}</div>
+          <div class="kpi-sub tabular">
+            Gồm ${summary.incomeCount} khoản nạp thêm (${escapeHtml(formatVND(summary.totalIncome))})
+          </div>
+        </div>
+
+        <div class="kpi-cell">
+          <span class="kpi-label">Tổng đã chi cá nhân</span>
+          <div class="kpi-value tabular">${escapeHtml(formatVND(summary.totalExpense))}</div>
+          <div class="kpi-sub tabular">
+            ${summary.expenseCount} khoản chi đám / việc riêng
+          </div>
+        </div>
+
+        <div class="kpi-cell">
+          <span class="kpi-label">Quỹ cá nhân còn lại</span>
+          <div class="kpi-value tabular ${summary.remaining < 0 ? 'text-danger' : 'text-positive'}">
+            ${escapeHtml(formatVND(summary.remaining))}
+          </div>
+          <div class="fund-meter" aria-hidden="true">
+            <div class="fund-meter-fill ${summary.remaining < 0 ? 'is-over' : ''}" style="width: ${usedRatio}%"></div>
+          </div>
+          <div class="kpi-sub">
+            ${summary.remaining >= 0 ? `Đã dùng ${usedRatio}% quỹ cá nhân` : 'Đang vượt ngân sách cá nhân'}
+          </div>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <!-- Left Column: Add Personal Fund Income / Expense -->
+        <section class="panel-surface quick-add-panel" aria-label="Ghi thu chi quỹ cá nhân">
+          <div class="panel-header">
+            <h2 class="panel-title">Ghi thu / chi cá nhân</h2>
+            <span class="panel-hint">Tự tính số dư tức thì</span>
+          </div>
+
+          <form id="add-personal-tx-form" class="quick-add-form" novalidate>
+            <div class="field-group">
+              <span class="field-label">Loại giao dịch</span>
+              <div class="priority-toggle-row" role="group" aria-label="Chọn loại giao dịch quỹ cá nhân">
+                <button
+                  type="button"
+                  class="seg-btn flex-1 ${this.draftPersonalType === 'expense' ? 'is-active-urgent' : ''}"
+                  data-action="select-personal-type"
+                  data-type="expense"
+                >Chi đi đám / việc riêng</button>
+                <button
+                  type="button"
+                  class="seg-btn flex-1 ${this.draftPersonalType === 'income' ? 'is-active' : ''}"
+                  data-action="select-personal-type"
+                  data-type="income"
+                >Nạp vào quỹ</button>
+              </div>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="ptx-title">Nội dung khoản thu / chi</label>
+              <input
+                id="ptx-title"
+                type="text"
+                class="text-input"
+                maxlength="64"
+                placeholder="${this.draftPersonalType === 'income' ? 'Ví dụ: Trích lương bỏ quỹ tháng này...' : 'Ví dụ: Mừng cưới bạn thân, Viếng đám...'}"
+                value="${escapeHtml(this.draftPersonalTitle)}"
+                autocomplete="off"
+              />
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="ptx-date">Ngày thực hiện</label>
+              <input
+                id="ptx-date"
+                type="date"
+                class="text-input tabular"
+                value="${escapeHtml(this.draftPersonalDateISO)}"
+              />
+              <div class="lunar-conversion-note">
+                Âm lịch: <strong>${escapeHtml(formatLunarFull(draftPersonalLunar))}</strong>
+              </div>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="ptx-amount">Số tiền (đồng)</label>
+              <input
+                id="ptx-amount"
+                type="number"
+                class="text-input tabular"
+                min="0"
+                step="50000"
+                value="${this.draftPersonalAmount}"
+              />
+              <div class="button-row-wrap" role="group" aria-label="Chọn nhanh số tiền cá nhân">
+                ${personalPresets
+                  .map(
+                    (amt) => `
+                      <button
+                        type="button"
+                        class="seg-btn tabular ${this.draftPersonalAmount === amt ? 'is-active' : ''}"
+                        data-action="select-personal-amount"
+                        data-amount="${amt}"
+                      >${escapeHtml(formatCompactVND(amt))}</button>
+                    `
+                  )
+                  .join('')}
+              </div>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="ptx-note">Ghi chú (tùy chọn)</label>
+              <input
+                id="ptx-note"
+                type="text"
+                class="text-input"
+                maxlength="80"
+                placeholder="Ví dụ: Đi cùng nhóm bạn cũ, chuyển khoản..."
+                value="${escapeHtml(this.draftPersonalNote)}"
+              />
+            </div>
+
+            <button type="submit" class="btn-submit-full">
+              ${this.draftPersonalType === 'income' ? 'Nạp vào quỹ cá nhân' : 'Lưu khoản chi cá nhân'}
+            </button>
+          </form>
+        </section>
+
+        <!-- Right Column: Personal Fund Ledger -->
+        <section class="panel-surface" aria-label="Sổ thu chi quỹ cá nhân">
+          <div class="list-header">
+            <div class="list-header-top">
+              <h2 class="panel-title">Sổ thu chi quỹ cá nhân (${sortedTx.length})</h2>
+              <span class="panel-hint tabular">Còn lại: ${escapeHtml(formatVND(summary.remaining))}</span>
+            </div>
+
+            <div class="filter-bar" role="tablist" aria-label="Lọc sổ quỹ cá nhân">
+              ${filterDefs
+                .map(
+                  (f) => `
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected="${this.personalFilter === f.id}"
+                      class="filter-tab tabular ${this.personalFilter === f.id ? 'is-active' : ''}"
+                      data-action="set-personal-filter"
+                      data-filter="${f.id}"
+                    >${escapeHtml(f.label)} (${f.count})</button>
+                  `
+                )
+                .join('')}
+            </div>
+          </div>
+
+          <div class="event-list">
+            ${
+              sortedTx.length === 0
+                ? `<div class="empty-state">
+                    <p class="empty-title">Chưa có khoản thu chi nào trong mục này.</p>
+                    <p class="empty-sub">Hãy ghi nhanh một khoản chi đi đám hoặc nạp thêm quỹ ở khung bên cạnh.</p>
+                  </div>`
+                : sortedTx.map((tx) => this.renderPersonalTxRow(tx)).join('')
+            }
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
+  private renderPersonalTxRow(tx: PersonalTransaction): string {
+    const lunar = solarISOToLunar(tx.dateISO);
+    const isIncome = tx.type === 'income';
+
+    if (this.editingPersonalTxId === tx.id) {
+      return `
+        <form class="inline-edit-box" data-action="save-personal-tx-edit" data-id="${tx.id}">
+          <div class="inline-edit-title">Chỉnh sửa khoản quỹ cá nhân</div>
+          <div class="inline-edit-grid">
+            <div class="field-group span-2">
+              <label class="field-label">Nội dung</label>
+              <input type="text" name="title" class="text-input" maxlength="64" value="${escapeHtml(tx.title)}" required />
+            </div>
+            <div class="field-group">
+              <label class="field-label">Loại giao dịch</label>
+              <select name="type" class="text-input">
+                <option value="expense" ${tx.type === 'expense' ? 'selected' : ''}>Chi đi đám / việc riêng</option>
+                <option value="income" ${tx.type === 'income' ? 'selected' : ''}>Nạp vào quỹ</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Ngày thực hiện (${escapeHtml(formatLunarShort(lunar))})</label>
+              <input type="date" name="dateISO" class="text-input tabular" value="${escapeHtml(tx.dateISO)}" required />
+            </div>
+            <div class="field-group">
+              <label class="field-label">Số tiền (đồng)</label>
+              <input type="number" name="amount" class="text-input tabular" min="0" step="50000" value="${tx.amount}" required />
+            </div>
+            <div class="field-group">
+              <label class="field-label">Ghi chú</label>
+              <input type="text" name="note" class="text-input" maxlength="80" value="${escapeHtml(tx.note)}" />
+            </div>
+          </div>
+          <div class="inline-edit-footer">
+            <button type="button" class="btn-secondary-sm" data-action="cancel-edit-personal-tx">Hủy</button>
+            <button type="submit" class="btn-primary-sm">Lưu thay đổi</button>
+          </div>
+        </form>
+      `;
+    }
+
+    return `
+      <article class="event-row ${isIncome ? 'urgency-attended' : 'urgency-far'}">
+        <div class="event-main">
+          <div class="event-meta-line">
+            <span class="meta-urgency ${isIncome ? 'urgency-text-attended' : 'urgency-text-urgent'}">
+              ${isIncome ? 'Nạp quỹ' : 'Khoản chi'}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span class="tabular">${escapeHtml(formatDateVN(tx.dateISO))}</span>
+            <span class="meta-lunar tabular">(${escapeHtml(formatLunarShort(lunar))})</span>
+          </div>
+          <h3 class="event-title">${escapeHtml(tx.title)}</h3>
+          ${
+            tx.note
+              ? `<div class="member-sub-line">${escapeHtml(tx.note)}</div>`
+              : ''
+          }
+        </div>
+        <div class="event-right">
+          <div class="amount-display tabular ${isIncome ? 'text-positive' : 'text-danger'}">
+            ${isIncome ? '+' : '-'}${escapeHtml(formatVND(tx.amount))}
+          </div>
+          <div class="event-actions">
+            <button
+              type="button"
+              class="btn-edit"
+              data-action="start-edit-personal-tx"
+              data-id="${tx.id}"
+            >Sửa</button>
+            <button
+              type="button"
+              class="btn-delete"
+              data-action="delete-personal-tx"
+              data-id="${tx.id}"
+              aria-label="Xóa khoản quỹ cá nhân"
+            >Xóa</button>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  // =========================================================================
+  // TRANG 3: QUỸ ĐÁM (FUND MANAGEMENT PAGE)
   // =========================================================================
   private renderFundPage(now: Date): string {
     const state = this.store.getState();
@@ -732,15 +1463,15 @@ export class FamilyLedgerApp2D {
     return `
       <section class="page-intro">
         <div>
-          <h1 class="page-heading">Quản lý Tiền Quỹ Đám</h1>
+          <h1 class="page-heading">Quản lý Quỹ Gia Tộc</h1>
           <p class="page-subheading">
-            Theo dõi ngân sách quỹ đầu năm, ghi nhận đóng góp của thành viên và kiểm soát toàn bộ tiền đám đã đi, sắp tới.
+            Theo dõi ngân sách quỹ gia tộc đầu năm, ghi nhận đóng góp của các thành viên và kiểm soát toàn bộ tiền đám đã đi, sắp tới.
           </p>
         </div>
       </section>
 
       <!-- 4-Column Fund KPI Strip -->
-      <section class="kpi-strip" aria-label="Tổng quan tiền quỹ đám">
+      <section class="kpi-strip" aria-label="Tổng quan quỹ gia tộc">
         <div class="kpi-cell">
           <div class="kpi-label-row">
             <span class="kpi-label">Quỹ gốc đầu năm</span>
@@ -762,7 +1493,7 @@ export class FamilyLedgerApp2D {
         </div>
 
         <div class="kpi-cell">
-          <span class="kpi-label">Tổng quỹ đám hiện có</span>
+          <span class="kpi-label">Tổng quỹ gia tộc hiện có</span>
           <div class="kpi-value tabular text-positive">${escapeHtml(formatVND(summary.fundBudget))}</div>
           <div class="kpi-sub tabular">
             Gồm ${state.contributions.length} khoản đóng góp (${escapeHtml(formatVND(summary.totalContributions))})
@@ -999,6 +1730,7 @@ export class FamilyLedgerApp2D {
     }
     const urgency = getRowUrgency(ev, now);
     const isSkipped = ev.status === 'skipped';
+    const lunar = solarISOToLunar(ev.dateISO);
 
     return `
       <article class="event-row urgency-${urgency.cls}">
@@ -1007,6 +1739,7 @@ export class FamilyLedgerApp2D {
             <span class="meta-urgency urgency-text-${urgency.cls}">${escapeHtml(STATUS_LABELS[ev.status])}</span>
             <span aria-hidden="true">·</span>
             <span class="tabular">${escapeHtml(formatDateVN(ev.dateISO))}</span>
+            <span class="meta-lunar tabular">(${escapeHtml(formatLunarShort(lunar))})</span>
             <span aria-hidden="true">·</span>
             <span>${escapeHtml(CATEGORY_LABELS[ev.category])}</span>
           </div>
@@ -1025,7 +1758,7 @@ export class FamilyLedgerApp2D {
   }
 
   // =========================================================================
-  // TRANG 3: GIA ĐÌNH & GIA TỘC (FAMILY MEMBERS PAGE)
+  // TRANG 4: GIA ĐÌNH & GIA TỘC (FAMILY MEMBERS PAGE)
   // =========================================================================
   private renderFamilyPage(): string {
     const state = this.store.getState();
@@ -1104,7 +1837,7 @@ export class FamilyLedgerApp2D {
         <div class="kpi-cell">
           <span class="kpi-label">Tổng đóng góp quỹ đã ghi</span>
           <div class="kpi-value tabular text-positive">${escapeHtml(formatVND(totalMemberContribs))}</div>
-          <div class="kpi-sub">Đồng bộ trực tiếp với trang Quỹ đám</div>
+          <div class="kpi-sub">Đồng bộ trực tiếp với trang Quỹ gia tộc</div>
         </div>
       </section>
 
@@ -1340,7 +2073,8 @@ export class FamilyLedgerApp2D {
     if (!q) return base;
     return base.filter((ev) => {
       const assignee = this.store.getMemberById(ev.assigneeId);
-      const hay = `${ev.title} ${CATEGORY_LABELS[ev.category]} ${formatDateVN(ev.dateISO)} ${assignee?.name ?? ''}`.toLowerCase();
+      const lunarText = formatLunarShort(solarISOToLunar(ev.dateISO));
+      const hay = `${ev.title} ${CATEGORY_LABELS[ev.category]} ${formatDateVN(ev.dateISO)} ${lunarText} ${assignee?.name ?? ''}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -1357,7 +2091,10 @@ export class FamilyLedgerApp2D {
       QUICK_TITLE_TEMPLATES.find((t) => t.category === this.draftCategory)
         ?.title ?? 'Ngày đám gia đình';
     const finalTitle = typedTitle || fallbackTitle;
-    const finalDate = dateInput?.value || this.draftDateISO;
+    const finalDate =
+      this.draftCalendarMode === 'solar'
+        ? dateInput?.value || this.draftDateISO
+        : this.draftDateISO;
     const parsedAmount = Number(
       (amountInput?.value ?? '').replace(/[^\d]/g, '')
     );
@@ -1372,19 +2109,64 @@ export class FamilyLedgerApp2D {
     this.store.addEvent({
       title: finalTitle,
       dateISO: finalDate,
+      calendarType: this.draftCalendarMode,
       category: this.draftCategory,
       priority: this.draftPriority,
       amount: finalAmount,
       assigneeId,
     });
 
+    const lunarStr = formatLunarShort(solarISOToLunar(finalDate));
     this.draftTitle = '';
     this.draftDateISO = addDaysISO(new Date(), 0);
+    this.syncDraftLunarFromSolar(this.draftDateISO);
     this.draftAssigneeId = '';
     this.audio.playComplete();
     this.render();
     this.showToast(
-      `Đã ghi nhanh "${finalTitle}" (${formatDateVN(finalDate)} · ${formatVND(finalAmount)})`
+      `Đã ghi nhanh "${finalTitle}" (${formatDateVN(finalDate)} · ${lunarStr} · ${formatVND(finalAmount)})`
+    );
+  }
+
+  private handleAddPersonalTxSubmit(): void {
+    const titleInput = this.root.querySelector<HTMLInputElement>('#ptx-title');
+    const dateInput = this.root.querySelector<HTMLInputElement>('#ptx-date');
+    const amountInput = this.root.querySelector<HTMLInputElement>('#ptx-amount');
+    const noteInput = this.root.querySelector<HTMLInputElement>('#ptx-note');
+
+    const title = (titleInput?.value ?? this.draftPersonalTitle).trim();
+    const dateISO = dateInput?.value || this.draftPersonalDateISO;
+    const parsedAmount = Number(
+      (amountInput?.value ?? '').replace(/[^\d]/g, '')
+    );
+    const amount =
+      Number.isFinite(parsedAmount) && parsedAmount > 0
+        ? parsedAmount
+        : this.draftPersonalAmount;
+    const note = (noteInput?.value ?? this.draftPersonalNote).trim();
+
+    if (amount <= 0) {
+      this.showToast('Vui lòng nhập số tiền lớn hơn 0 đ.');
+      return;
+    }
+
+    const tx = this.store.addPersonalTransaction({
+      type: this.draftPersonalType,
+      title,
+      dateISO,
+      amount,
+      note,
+    });
+
+    this.draftPersonalTitle = '';
+    this.draftPersonalNote = '';
+    this.draftPersonalDateISO = addDaysISO(new Date(), 0);
+    this.audio.playComplete();
+    this.render();
+    this.showToast(
+      tx.type === 'income'
+        ? `Đã nạp ${formatVND(tx.amount)} vào quỹ cá nhân.`
+        : `Đã ghi khoản chi "${tx.title}" (${formatVND(tx.amount)}) vào quỹ cá nhân.`
     );
   }
 
@@ -1405,7 +2187,9 @@ export class FamilyLedgerApp2D {
     const dateISO = dateInput?.value || this.draftContribDateISO;
     const parsedAmt = Number((amountInput?.value ?? '').replace(/[^\d]/g, ''));
     const amount =
-      Number.isFinite(parsedAmt) && parsedAmt >= 0 ? parsedAmt : this.draftContribAmount;
+      Number.isFinite(parsedAmt) && parsedAmt >= 0
+        ? parsedAmt
+        : this.draftContribAmount;
     const note = (noteInput?.value ?? this.draftContribNote).trim();
 
     this.store.addContribution({
@@ -1443,7 +2227,8 @@ export class FamilyLedgerApp2D {
 
     const relation =
       (relInput?.value ?? this.draftMemberRelation).trim() || 'Người thân';
-    const branch = (branchSelect?.value as FamilyBranch) || this.draftMemberBranch;
+    const branch =
+      (branchSelect?.value as FamilyBranch) || this.draftMemberBranch;
     const phone = (phoneInput?.value ?? this.draftMemberPhone).trim();
     const note = (noteInput?.value ?? this.draftMemberNote).trim();
 
@@ -1474,8 +2259,46 @@ export class FamilyLedgerApp2D {
     qaDate?.addEventListener('change', () => {
       if (qaDate.value) {
         this.draftDateISO = qaDate.value;
+        this.syncDraftLunarFromSolar(qaDate.value);
         this.render();
       }
+    });
+
+    // Quick-Add Lunar pickers (synced live with #qa-date)
+    const qaLunarDay =
+      this.root.querySelector<HTMLSelectElement>('#qa-lunar-day');
+    qaLunarDay?.addEventListener('change', () => {
+      this.draftLunarDay = Number(qaLunarDay.value) || 1;
+      this.draftCalendarMode = 'lunar';
+      this.syncDraftSolarFromLunar();
+      this.render();
+    });
+
+    const qaLunarMonth =
+      this.root.querySelector<HTMLSelectElement>('#qa-lunar-month');
+    qaLunarMonth?.addEventListener('change', () => {
+      this.draftLunarMonth = Number(qaLunarMonth.value) || 1;
+      this.draftCalendarMode = 'lunar';
+      this.syncDraftSolarFromLunar();
+      this.render();
+    });
+
+    const qaLunarYear =
+      this.root.querySelector<HTMLSelectElement>('#qa-lunar-year');
+    qaLunarYear?.addEventListener('change', () => {
+      this.draftLunarYear = Number(qaLunarYear.value) || new Date().getFullYear();
+      this.draftCalendarMode = 'lunar';
+      this.syncDraftSolarFromLunar();
+      this.render();
+    });
+
+    const qaLunarLeap =
+      this.root.querySelector<HTMLInputElement>('#qa-lunar-leap');
+    qaLunarLeap?.addEventListener('change', () => {
+      this.draftLunarLeap = qaLunarLeap.checked;
+      this.draftCalendarMode = 'lunar';
+      this.syncDraftSolarFromLunar();
+      this.render();
     });
 
     const qaAmount = this.root.querySelector<HTMLInputElement>('#qa-amount');
@@ -1503,6 +2326,54 @@ export class FamilyLedgerApp2D {
         refreshed.focus();
         refreshed.setSelectionRange(caret, caret);
       }
+    });
+
+    // --- Personal Fund Base Budget & Transaction Forms ---
+    const personalBaseForm = this.root.querySelector<HTMLFormElement>(
+      '#personal-base-edit-form'
+    );
+    personalBaseForm?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = this.root.querySelector<HTMLInputElement>(
+        '#personal-base-input'
+      );
+      const val = Number(input?.value ?? 0);
+      this.editingPersonalBaseFund = false;
+      this.store.setPersonalFundBudget(val);
+      this.audio.playTap(520);
+      this.showToast(`Đã cập nhật Ngân sách cá nhân gốc thành ${formatVND(val)}.`);
+    });
+
+    const ptxForm = this.root.querySelector<HTMLFormElement>(
+      '#add-personal-tx-form'
+    );
+    ptxForm?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      this.handleAddPersonalTxSubmit();
+    });
+
+    const ptxTitle = this.root.querySelector<HTMLInputElement>('#ptx-title');
+    ptxTitle?.addEventListener('input', () => {
+      this.draftPersonalTitle = ptxTitle.value;
+    });
+
+    const ptxDate = this.root.querySelector<HTMLInputElement>('#ptx-date');
+    ptxDate?.addEventListener('change', () => {
+      if (ptxDate.value) {
+        this.draftPersonalDateISO = ptxDate.value;
+        this.render();
+      }
+    });
+
+    const ptxAmount = this.root.querySelector<HTMLInputElement>('#ptx-amount');
+    ptxAmount?.addEventListener('input', () => {
+      const n = Number(ptxAmount.value);
+      if (Number.isFinite(n) && n >= 0) this.draftPersonalAmount = n;
+    });
+
+    const ptxNote = this.root.querySelector<HTMLInputElement>('#ptx-note');
+    ptxNote?.addEventListener('input', () => {
+      this.draftPersonalNote = ptxNote.value;
     });
 
     // --- Fund Base Budget Edit Form ---
@@ -1533,9 +2404,7 @@ export class FamilyLedgerApp2D {
     ctbMember?.addEventListener('change', () => {
       this.draftContribMemberId = ctbMember.value;
       const member = this.store.getMemberById(ctbMember.value);
-      if (member) {
-        this.draftContribName = member.name;
-      }
+      if (member) this.draftContribName = member.name;
       this.render();
     });
 
@@ -1618,11 +2487,19 @@ export class FamilyLedgerApp2D {
           const id = form.dataset.id;
           if (!id) return;
           const fd = new FormData(form);
+          let nextDateISO = String(fd.get('dateISO') ?? '');
+          if (this.editEventCalendarMode === 'lunar') {
+            const ld = Number(fd.get('lunarDay') ?? 1);
+            const lm = Number(fd.get('lunarMonth') ?? 1);
+            const ly = Number(fd.get('lunarYear') ?? new Date().getFullYear());
+            nextDateISO = lunarToSolarISO(ld, lm, ly, false);
+          }
           this.editingEventId = null;
           this.editingFundEventId = null;
           this.store.updateEvent(id, {
             title: String(fd.get('title') ?? ''),
-            dateISO: String(fd.get('dateISO') ?? ''),
+            dateISO: nextDateISO || undefined,
+            calendarType: this.editEventCalendarMode,
             amount: Number(fd.get('amount') ?? 0),
             category: String(fd.get('category') ?? 'gio') as EventCategory,
             priority: String(fd.get('priority') ?? 'normal') as EventPriority,
@@ -1681,6 +2558,27 @@ export class FamilyLedgerApp2D {
         });
       });
 
+    this.root
+      .querySelectorAll<HTMLFormElement>('form[data-action="save-personal-tx-edit"]')
+      .forEach((form) => {
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const id = form.dataset.id;
+          if (!id) return;
+          const fd = new FormData(form);
+          this.editingPersonalTxId = null;
+          this.store.updatePersonalTransaction(id, {
+            title: String(fd.get('title') ?? ''),
+            type: String(fd.get('type') ?? 'expense') as PersonalTransactionType,
+            dateISO: String(fd.get('dateISO') ?? ''),
+            amount: Number(fd.get('amount') ?? 0),
+            note: String(fd.get('note') ?? ''),
+          });
+          this.audio.playComplete();
+          this.showToast('Đã lưu thay đổi khoản quỹ cá nhân.');
+        });
+      });
+
     // --- Click Actions ---
     this.root.querySelectorAll<HTMLElement>('[data-action]').forEach((el) => {
       const action = el.dataset.action;
@@ -1689,7 +2587,8 @@ export class FamilyLedgerApp2D {
         action === 'save-event-edit' ||
         action === 'save-fund-event-edit' ||
         action === 'save-contribution-edit' ||
-        action === 'save-member-edit'
+        action === 'save-member-edit' ||
+        action === 'save-personal-tx-edit'
       ) {
         return;
       }
@@ -1706,13 +2605,57 @@ export class FamilyLedgerApp2D {
           case 'trigger-reminder': {
             this.audio.playReminderBell();
             const rev = this.store.getDailyReviewHeadline();
+            if (this.activePage !== 'calendar') {
+              this.activePage = 'calendar';
+              this.render();
+            }
+            const reminderEl = this.root.querySelector<HTMLElement>(
+              '#upcoming-reminders-section'
+            );
+            reminderEl?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
             if (rev.focusEvent) {
+              const days = getDaysUntil(rev.focusEvent.dateISO);
+              const lunarStr = formatLunarShort(
+                solarISOToLunar(rev.focusEvent.dateISO)
+              );
+              const dayText =
+                days < 0
+                  ? `Quá ${Math.abs(days)} ngày`
+                  : days === 0
+                    ? 'Hôm nay'
+                    : days === 1
+                      ? 'Ngày mai'
+                      : `Còn ${days} ngày`;
               this.showToast(
-                `Nhắc hôm nay: ${rev.focusEvent.title} (${formatDateVN(rev.focusEvent.dateISO)} · ${formatVND(rev.focusEvent.amount)})`
+                `Nhắc lịch (${dayText}): ${rev.focusEvent.title} · ${formatDateVN(rev.focusEvent.dateISO)} (${lunarStr}) · ${formatVND(rev.focusEvent.amount)}`
               );
             } else {
-              this.showToast('Hôm nay không có ngày đám gấp. Cả nhà yên tâm!');
+              this.showToast('Hôm nay không có ngày đám gần đến. Cả nhà yên tâm!');
             }
+            break;
+          }
+          case 'set-reminder-window': {
+            const days = Number(el.dataset.days ?? 14) as 3 | 7 | 14 | 30;
+            if (![3, 7, 14, 30].includes(days)) return;
+            this.reminderWindowDays = days;
+            this.audio.playTap(480);
+            this.render();
+            break;
+          }
+          case 'dismiss-reminder': {
+            const id = el.dataset.id;
+            if (!id) return;
+            this.dismissedReminderIds.add(id);
+            this.audio.playTap(360);
+            this.render();
+            this.showToast('Đã ẩn thông báo nhắc cho ngày này.');
+            break;
+          }
+          case 'restore-reminders': {
+            this.dismissedReminderIds.clear();
+            this.audio.playTap(500);
+            this.render();
+            this.showToast('Đã hiện lại toàn bộ thông báo nhắc ngày gần đến.');
             break;
           }
           case 'quick-attend-focus': {
@@ -1721,6 +2664,25 @@ export class FamilyLedgerApp2D {
             this.store.setEventStatus(id, 'attended');
             this.audio.playComplete();
             this.showToast('Đã đánh dấu "Đã đi" và cập nhật số tiền quỹ còn lại.');
+            break;
+          }
+          case 'set-draft-cal-mode': {
+            const mode = el.dataset.mode as CalendarMode;
+            if (!mode || mode === this.draftCalendarMode) return;
+            this.draftCalendarMode = mode;
+            if (mode === 'lunar') {
+              this.syncDraftLunarFromSolar(this.draftDateISO);
+            }
+            this.audio.playTap(480);
+            this.render();
+            break;
+          }
+          case 'set-edit-cal-mode': {
+            const mode = el.dataset.mode as CalendarMode;
+            if (!mode || mode === this.editEventCalendarMode) return;
+            this.editEventCalendarMode = mode;
+            this.audio.playTap(480);
+            this.render();
             break;
           }
           case 'fund-delta': {
@@ -1758,7 +2720,17 @@ export class FamilyLedgerApp2D {
             const iso = el.dataset.date;
             if (!iso) return;
             this.draftDateISO = iso;
+            this.syncDraftLunarFromSolar(iso);
             this.audio.playTap(480);
+            this.render();
+            break;
+          }
+          case 'select-lunar-day-preset': {
+            const day = Number(el.dataset.day ?? 1);
+            this.draftLunarDay = day;
+            this.draftCalendarMode = 'lunar';
+            this.syncDraftSolarFromLunar();
+            this.audio.playTap(500);
             this.render();
             break;
           }
@@ -1823,7 +2795,10 @@ export class FamilyLedgerApp2D {
             break;
           }
           case 'start-edit-event': {
-            this.editingEventId = el.dataset.id ?? null;
+            const id = el.dataset.id ?? null;
+            const ev = this.store.getState().events.find((x) => x.id === id);
+            this.editingEventId = id;
+            this.editEventCalendarMode = ev?.calendarType ?? 'solar';
             this.audio.playTap(460);
             this.render();
             break;
@@ -1841,6 +2816,69 @@ export class FamilyLedgerApp2D {
             this.showToast('Đã xóa ngày đám khỏi sổ.');
             break;
           }
+          // --- Personal Fund Page Actions ---
+          case 'personal-fund-delta': {
+            const delta = Number(el.dataset.delta ?? 0);
+            this.store.adjustPersonalFund(delta);
+            this.audio.playTap(delta > 0 ? 540 : 380);
+            this.showToast(
+              delta > 0
+                ? 'Đã bổ sung thêm 500.000 đ vào Ngân sách cá nhân gốc.'
+                : 'Đã giảm 500.000 đ trong Ngân sách cá nhân gốc.'
+            );
+            break;
+          }
+          case 'toggle-edit-personal-base': {
+            this.editingPersonalBaseFund = !this.editingPersonalBaseFund;
+            this.render();
+            if (this.editingPersonalBaseFund) {
+              this.root
+                .querySelector<HTMLInputElement>('#personal-base-input')
+                ?.focus();
+            }
+            break;
+          }
+          case 'select-personal-type': {
+            const nextType = el.dataset.type as PersonalTransactionType;
+            if (!nextType) return;
+            this.draftPersonalType = nextType;
+            this.audio.playTap(480);
+            this.render();
+            break;
+          }
+          case 'select-personal-amount': {
+            this.draftPersonalAmount = Number(el.dataset.amount ?? 0);
+            this.audio.playTap(520);
+            this.render();
+            break;
+          }
+          case 'set-personal-filter': {
+            this.personalFilter =
+              (el.dataset.filter as 'all' | PersonalTransactionType) ?? 'all';
+            this.audio.playTap(460);
+            this.render();
+            break;
+          }
+          case 'start-edit-personal-tx': {
+            this.editingPersonalTxId = el.dataset.id ?? null;
+            this.audio.playTap(460);
+            this.render();
+            break;
+          }
+          case 'cancel-edit-personal-tx': {
+            this.editingPersonalTxId = null;
+            this.render();
+            break;
+          }
+          case 'delete-personal-tx': {
+            const id = el.dataset.id;
+            if (!id) return;
+            this.audio.playTap(280);
+            this.store.deletePersonalTransaction(id);
+            this.showToast('Đã xóa khoản thu chi khỏi quỹ cá nhân.');
+            break;
+          }
+          // --- Fund Page Actions ---
           case 'select-contrib-amount': {
             this.draftContribAmount = Number(el.dataset.amount ?? 0);
             this.audio.playTap(520);
@@ -1863,11 +2901,14 @@ export class FamilyLedgerApp2D {
             if (!id) return;
             this.audio.playTap(280);
             this.store.deleteContribution(id);
-            this.showToast('Đã xóa khoản đóng góp khỏi quỹ đám.');
+            this.showToast('Đã xóa khoản đóng góp khỏi quỹ gia tộc.');
             break;
           }
           case 'start-edit-fund-event': {
-            this.editingFundEventId = el.dataset.id ?? null;
+            const id = el.dataset.id ?? null;
+            const ev = this.store.getState().events.find((x) => x.id === id);
+            this.editingFundEventId = id;
+            this.editEventCalendarMode = ev?.calendarType ?? 'solar';
             this.audio.playTap(460);
             this.render();
             break;
@@ -1877,6 +2918,7 @@ export class FamilyLedgerApp2D {
             this.render();
             break;
           }
+          // --- Family Page Actions ---
           case 'select-relation-preset': {
             this.draftMemberRelation = el.dataset.relation ?? 'Người thân';
             this.audio.playTap(480);

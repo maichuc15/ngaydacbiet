@@ -233,6 +233,219 @@ a:focus-visible {
   max-width: 72ch;
 }
 
+/* Top Quỹ Gia Tộc Section */
+.clan-fund-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-hairline);
+  background: var(--bg-surface);
+}
+
+.clan-fund-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.clan-fund-title {
+  margin: 0 0 2px;
+  font-size: clamp(1.2rem, 2.2vw, 1.45rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink-primary);
+}
+
+.clan-fund-sub {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-secondary);
+}
+
+.clan-fund-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.clan-kpi-strip {
+  border-radius: var(--radius-md);
+}
+
+/* Upcoming Reminder Notifications Panel */
+.reminder-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-hairline);
+  background: var(--bg-surface);
+}
+
+.reminder-panel.has-urgent {
+  border-color: var(--accent-red-border);
+}
+
+.reminder-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reminder-heading-group {
+  min-width: 0;
+  flex: 1;
+}
+
+.reminder-subtitle {
+  margin: 2px 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-secondary);
+}
+
+.reminder-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.reminder-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-hairline);
+}
+
+.reminder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+}
+
+.reminder-row:last-child {
+  border-bottom: none;
+}
+
+.reminder-row.is-urgent {
+  background: var(--accent-red-bg);
+}
+
+.reminder-row.is-soon {
+  background: var(--accent-amber-bg);
+}
+
+.reminder-row.is-far {
+  background: transparent;
+}
+
+.reminder-countdown {
+  width: 112px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.reminder-countdown-main {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.reminder-countdown-sub {
+  font-size: 0.75rem;
+  color: var(--ink-secondary);
+}
+
+.reminder-countdown.is-urgent .reminder-countdown-main {
+  color: var(--accent-red);
+}
+
+.reminder-countdown.is-soon .reminder-countdown-main {
+  color: var(--accent-amber);
+}
+
+.reminder-countdown.is-far .reminder-countdown-main {
+  color: var(--accent-jade);
+}
+
+.reminder-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.reminder-title {
+  margin: 0;
+  font-size: 0.975rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+  line-height: 1.35;
+}
+
+.reminder-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.reminder-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-hairline);
+}
+
+/* Integrated Lunar Calendar Box inside #qa-date field group */
+.qa-lunar-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-hairline);
+}
+
+.qa-lunar-box-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.qa-lunar-tag {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent-red);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.qa-lunar-canchi {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-primary);
+}
+
 /* Daily Review Banner */
 .daily-banner {
   display: flex;
@@ -954,6 +1167,310 @@ a:focus-visible {
   color: var(--ink-muted);
 }
 
+/* Lunar Calendar Controls & Monthly Grid */
+.field-label-split,
+.inline-edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mode-switch {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-hairline);
+  gap: 2px;
+}
+
+.mode-btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mode-btn.is-active {
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.lunar-picker-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.lunar-conversion-note {
+  font-size: 0.8125rem;
+  color: var(--ink-secondary);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--ink-secondary);
+  cursor: pointer;
+}
+
+.meta-lunar {
+  color: var(--accent-red);
+  font-weight: 600;
+}
+
+.lunar-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.cal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.cal-lunar-range {
+  font-size: 0.85rem;
+  color: var(--accent-red);
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.cal-nav-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+  text-align: center;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--ink-secondary);
+}
+
+.cal-weekdays .is-sunday {
+  color: var(--accent-red);
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.cal-cell {
+  min-height: 76px;
+  padding: 8px 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-hairline);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  text-align: left;
+  gap: 2px;
+}
+
+.cal-cell.is-empty {
+  background: transparent;
+  border-color: transparent;
+  pointer-events: none;
+}
+
+.cal-cell:hover:not(.is-empty) {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+
+.cal-cell.is-today {
+  border-color: var(--accent-red);
+  background: var(--accent-red-bg);
+}
+
+.cal-cell.is-selected {
+  border-color: var(--ink-primary);
+  box-shadow: inset 0 0 0 1px var(--ink-primary);
+}
+
+.cal-solar {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+  line-height: 1.1;
+}
+
+.cal-lunar {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.cal-lunar.is-special {
+  color: var(--accent-red);
+  font-weight: 700;
+}
+
+.cal-event-count {
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.cal-event-count.is-urgent {
+  color: var(--accent-red);
+}
+
+.cal-event-count.is-soon {
+  color: var(--accent-amber);
+}
+
+.cal-event-count.is-normal {
+  color: var(--accent-jade);
+}
+
+.cal-festival-text {
+  font-size: 0.68rem;
+  color: var(--accent-amber);
+  font-weight: 600;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.cal-legend {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-hairline);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.day-detail-card {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.day-detail-solar {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+}
+
+.day-detail-lunar {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--accent-red);
+}
+
+.day-detail-canchi {
+  font-size: 0.8125rem;
+  color: var(--ink-secondary);
+}
+
+.day-detail-festival {
+  margin-top: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-amber);
+}
+
+.day-events-section {
+  margin-top: 16px;
+}
+
+.day-events-heading {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+  margin-bottom: 8px;
+}
+
+.mini-event-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.mini-event-row:last-child {
+  border-bottom: none;
+}
+
+.mini-event-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.mini-event-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+}
+
+.day-detail-actions {
+  margin-top: 14px;
+}
+
+.converter-result {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--accent-red-bg);
+  border: 1px solid var(--accent-red-border);
+}
+
+.converter-result-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-red);
+}
+
+.converter-result-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+  margin-top: 2px;
+}
+
+.converter-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* Mobile Bottom Tab Bar (Hidden on Desktop) */
 .mobile-tabbar {
   display: none;
@@ -1001,7 +1518,8 @@ a:focus-visible {
     border-bottom: 1px solid var(--border-hairline);
   }
 
-  .workspace-grid {
+  .workspace-grid,
+  .lunar-workspace {
     grid-template-columns: 1fr;
   }
 
@@ -1037,7 +1555,7 @@ a:focus-visible {
     backdrop-filter: blur(8px);
     border-top: 1px solid var(--border-hairline);
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
 
   .mobile-tab {
@@ -1049,7 +1567,7 @@ a:focus-visible {
     align-items: center;
     justify-content: center;
     gap: 3px;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     font-weight: 600;
     min-height: 48px;
   }
@@ -1060,6 +1578,55 @@ a:focus-visible {
 
   .toast {
     bottom: 72px;
+  }
+
+  .cal-cell {
+    min-height: 62px;
+    padding: 6px 4px;
+  }
+
+  .cal-festival-text {
+    display: none;
+  }
+
+  .lunar-picker-row {
+    grid-template-columns: 1fr;
+  }
+
+  .clan-fund-card {
+    padding: 14px;
+  }
+
+  .clan-fund-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .clan-fund-actions .btn-secondary-sm {
+    width: 100%;
+  }
+
+  .reminder-panel {
+    padding: 14px;
+  }
+
+  .reminder-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .reminder-countdown {
+    width: auto;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .reminder-right {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
   }
 
   .daily-banner {

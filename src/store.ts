@@ -1,6 +1,8 @@
+import {formatLunarShort, solarISOToLunar} from './lunar.ts';
 import {
   AppState,
   AttendanceStatus,
+  CalendarMode,
   EventCategory,
   EventPriority,
   FamilyBranch,
@@ -9,12 +11,16 @@ import {
   FilterMode,
   FinancialSummary,
   FundContribution,
+  PersonalFundSummary,
+  PersonalTransaction,
+  PersonalTransactionType,
   UrgencyVisual,
 } from './types.ts';
 
 const STORAGE_KEY = 'so_gio_chap_gia_dinh_v2';
 const LEGACY_STORAGE_KEY = 'so_gio_chap_gia_dinh_v1';
 const DEFAULT_FUND_BUDGET = 6_000_000;
+const DEFAULT_PERSONAL_FUND_BUDGET = 3_000_000;
 
 export function toLocalDateISO(date: Date): string {
   const y = date.getFullYear();
@@ -253,12 +259,44 @@ function createInitialContributions(now = new Date()): FundContribution[] {
   ];
 }
 
+function createInitialPersonalTransactions(
+  now = new Date()
+): PersonalTransaction[] {
+  return [
+    {
+      id: 'ptx_1',
+      type: 'income',
+      title: 'Trích lương bỏ quỹ đi đám tháng này',
+      dateISO: addDaysISO(now, -18),
+      amount: 1_500_000,
+      note: 'Quỹ dự phòng mừng cưới, hiếu hỷ bạn bè',
+    },
+    {
+      id: 'ptx_2',
+      type: 'expense',
+      title: 'Mừng cưới bạn thân đại học',
+      dateISO: addDaysISO(now, -9),
+      amount: 1_000_000,
+      note: 'Đi ăn tiệc tối thứ Bảy',
+    },
+    {
+      id: 'ptx_3',
+      type: 'expense',
+      title: 'Mừng tân gia nhà đồng nghiệp',
+      dateISO: addDaysISO(now, -3),
+      amount: 500_000,
+      note: 'Góp quà cùng phòng',
+    },
+  ];
+}
+
 function createInitialEvents(now = new Date()): FamilyEvent[] {
   return [
     {
       id: 'ev_gio_ong_noi',
       title: 'Giỗ Ông Nội (Cỗ tại nhà bác cả)',
       dateISO: addDaysISO(now, 0),
+      calendarType: 'lunar',
       category: 'gio',
       priority: 'important',
       amount: 1_500_000,
@@ -269,6 +307,7 @@ function createInitialEvents(now = new Date()): FamilyEvent[] {
       id: 'ev_cuoi_chu_hung',
       title: 'Đám cưới con gái chú Hùng',
       dateISO: addDaysISO(now, 2),
+      calendarType: 'solar',
       category: 'dam_cuoi',
       priority: 'important',
       amount: 1_000_000,
@@ -279,6 +318,7 @@ function createInitialEvents(now = new Date()): FamilyEvent[] {
       id: 'ev_chap_ho',
       title: 'Chạp họ Nguyễn · Cúng từ đường',
       dateISO: addDaysISO(now, 9),
+      calendarType: 'lunar',
       category: 'chap_ho',
       priority: 'important',
       amount: 500_000,
@@ -289,6 +329,7 @@ function createInitialEvents(now = new Date()): FamilyEvent[] {
       id: 'ev_thoi_noi_an',
       title: 'Đám thôi nôi bé An nhà anh Minh',
       dateISO: addDaysISO(now, 22),
+      calendarType: 'lunar',
       category: 'khac',
       priority: 'normal',
       amount: 500_000,
@@ -299,6 +340,7 @@ function createInitialEvents(now = new Date()): FamilyEvent[] {
       id: 'ev_gio_ba_ngoai',
       title: 'Giỗ Bà Ngoại (Về quê sáng sớm)',
       dateISO: addDaysISO(now, 48),
+      calendarType: 'lunar',
       category: 'gio',
       priority: 'important',
       amount: 1_000_000,
@@ -309,6 +351,7 @@ function createInitialEvents(now = new Date()): FamilyEvent[] {
       id: 'ev_mung_tho_bac',
       title: 'Mừng thọ 80 tuổi Bác Hai',
       dateISO: addDaysISO(now, -6),
+      calendarType: 'solar',
       category: 'khac',
       priority: 'important',
       amount: 1_000_000,
@@ -319,6 +362,7 @@ function createInitialEvents(now = new Date()): FamilyEvent[] {
       id: 'ev_tan_gia_co_lan',
       title: 'Tân gia nhà cô Lan (Đi công tác)',
       dateISO: addDaysISO(now, -14),
+      calendarType: 'solar',
       category: 'khac',
       priority: 'normal',
       amount: 500_000,
@@ -351,10 +395,17 @@ export class FamilyLedgerStore {
         ) {
           return {
             fundBudget: Math.max(0, parsed.fundBudget),
+            personalFundBudget:
+              typeof parsed.personalFundBudget === 'number'
+                ? Math.max(0, parsed.personalFundBudget)
+                : DEFAULT_PERSONAL_FUND_BUDGET,
             events: parsed.events,
             contributions: Array.isArray(parsed.contributions)
               ? parsed.contributions
               : createInitialContributions(),
+            personalTransactions: Array.isArray(parsed.personalTransactions)
+              ? parsed.personalTransactions
+              : createInitialPersonalTransactions(),
             members: Array.isArray(parsed.members)
               ? parsed.members
               : createInitialMembers(),
@@ -368,8 +419,10 @@ export class FamilyLedgerStore {
     }
     return {
       fundBudget: DEFAULT_FUND_BUDGET,
+      personalFundBudget: DEFAULT_PERSONAL_FUND_BUDGET,
       events: createInitialEvents(),
       contributions: createInitialContributions(),
+      personalTransactions: createInitialPersonalTransactions(),
       members: createInitialMembers(),
       filter: 'all',
       selectedEventId: 'ev_gio_ong_noi',
@@ -428,6 +481,7 @@ export class FamilyLedgerStore {
   addEvent(input: {
     title: string;
     dateISO: string;
+    calendarType?: CalendarMode;
     category: EventCategory;
     priority: EventPriority;
     amount: number;
@@ -438,6 +492,7 @@ export class FamilyLedgerStore {
       id: `ev_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       title: cleanTitle,
       dateISO: input.dateISO,
+      calendarType: input.calendarType ?? 'solar',
       category: input.category,
       priority: input.priority,
       amount: Math.max(0, Math.round(input.amount)),
@@ -459,6 +514,7 @@ export class FamilyLedgerStore {
     patch: {
       title?: string;
       dateISO?: string;
+      calendarType?: CalendarMode;
       category?: EventCategory;
       priority?: EventPriority;
       amount?: number;
@@ -470,8 +526,10 @@ export class FamilyLedgerStore {
       if (ev.id !== id) return ev;
       return {
         ...ev,
-        title: patch.title !== undefined ? patch.title.trim() || ev.title : ev.title,
+        title:
+          patch.title !== undefined ? patch.title.trim() || ev.title : ev.title,
         dateISO: patch.dateISO ?? ev.dateISO,
+        calendarType: patch.calendarType ?? ev.calendarType,
         category: patch.category ?? ev.category,
         priority: patch.priority ?? ev.priority,
         amount:
@@ -601,6 +659,109 @@ export class FamilyLedgerStore {
     this.emit();
   }
 
+  // --- Personal Fund Budget & Transactions CRUD ---
+  adjustPersonalFund(delta: number): void {
+    const next = Math.max(0, this.state.personalFundBudget + delta);
+    this.state = {...this.state, personalFundBudget: next};
+    this.emit();
+  }
+
+  setPersonalFundBudget(amount: number): void {
+    const clean = Number.isFinite(amount) ? Math.max(0, Math.round(amount)) : 0;
+    this.state = {...this.state, personalFundBudget: clean};
+    this.emit();
+  }
+
+  addPersonalTransaction(input: {
+    type: PersonalTransactionType;
+    title: string;
+    dateISO: string;
+    amount: number;
+    note: string;
+  }): PersonalTransaction {
+    const fallbackTitle =
+      input.type === 'income' ? 'Nạp vào quỹ cá nhân' : 'Chi từ quỹ cá nhân';
+    const item: PersonalTransaction = {
+      id: `ptx_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      type: input.type,
+      title: input.title.trim() || fallbackTitle,
+      dateISO: input.dateISO,
+      amount: Math.max(0, Math.round(input.amount)),
+      note: input.note.trim(),
+    };
+    this.state = {
+      ...this.state,
+      personalTransactions: [item, ...this.state.personalTransactions],
+    };
+    this.emit();
+    return item;
+  }
+
+  updatePersonalTransaction(
+    id: string,
+    patch: {
+      type?: PersonalTransactionType;
+      title?: string;
+      dateISO?: string;
+      amount?: number;
+      note?: string;
+    }
+  ): void {
+    const personalTransactions = this.state.personalTransactions.map((tx) => {
+      if (tx.id !== id) return tx;
+      return {
+        ...tx,
+        type: patch.type ?? tx.type,
+        title:
+          patch.title !== undefined ? patch.title.trim() || tx.title : tx.title,
+        dateISO: patch.dateISO ?? tx.dateISO,
+        amount:
+          patch.amount !== undefined && Number.isFinite(patch.amount)
+            ? Math.max(0, Math.round(patch.amount))
+            : tx.amount,
+        note: patch.note !== undefined ? patch.note.trim() : tx.note,
+      };
+    });
+    this.state = {...this.state, personalTransactions};
+    this.emit();
+  }
+
+  deletePersonalTransaction(id: string): void {
+    const personalTransactions = this.state.personalTransactions.filter(
+      (tx) => tx.id !== id
+    );
+    this.state = {...this.state, personalTransactions};
+    this.emit();
+  }
+
+  computePersonalSummary(): PersonalFundSummary {
+    let totalIncome = 0;
+    let totalExpense = 0;
+    let incomeCount = 0;
+    let expenseCount = 0;
+    for (const tx of this.state.personalTransactions) {
+      if (tx.type === 'income') {
+        totalIncome += tx.amount;
+        incomeCount += 1;
+      } else {
+        totalExpense += tx.amount;
+        expenseCount += 1;
+      }
+    }
+    const baseBudget = this.state.personalFundBudget;
+    const totalAvailable = baseBudget + totalIncome;
+    const remaining = totalAvailable - totalExpense;
+    return {
+      baseBudget,
+      totalIncome,
+      totalAvailable,
+      totalExpense,
+      remaining,
+      incomeCount,
+      expenseCount,
+    };
+  }
+
   // --- Family Members CRUD ---
   addMember(input: {
     name: string;
@@ -683,8 +844,10 @@ export class FamilyLedgerStore {
   resetSampleData(): void {
     this.state = {
       fundBudget: DEFAULT_FUND_BUDGET,
+      personalFundBudget: DEFAULT_PERSONAL_FUND_BUDGET,
       events: createInitialEvents(),
       contributions: createInitialContributions(),
+      personalTransactions: createInitialPersonalTransactions(),
       members: createInitialMembers(),
       filter: 'all',
       selectedEventId: 'ev_gio_ong_noi',
@@ -794,6 +957,7 @@ export class FamilyLedgerStore {
     const inWeek = pending.filter((e) => getDaysUntil(e.dateISO, now) <= 7).length;
     const assignee = this.getMemberById(next.assigneeId);
     const assigneeNote = assignee ? ` · Đại diện: ${assignee.name}` : '';
+    const lunarNote = formatLunarShort(solarISOToLunar(next.dateISO));
 
     if (days <= 0) {
       return {
@@ -802,7 +966,7 @@ export class FamilyLedgerStore {
           days === 0
             ? `NHẮC HÔM NAY: ${next.title}`
             : `QUÁ HẸN ${Math.abs(days)} NGÀY: ${next.title}`,
-        detail: `Dự chi ${formatVND(next.amount)} · ${next.priority === 'important' ? 'Quan trọng' : 'Bình thường'}${assigneeNote} · Còn ${inWeek} đám trong 7 ngày tới`,
+        detail: `${lunarNote} · Dự chi ${formatVND(next.amount)} · ${next.priority === 'important' ? 'Quan trọng' : 'Bình thường'}${assigneeNote} · Còn ${inWeek} đám trong 7 ngày tới`,
         focusEvent: next,
       };
     }
@@ -810,7 +974,7 @@ export class FamilyLedgerStore {
       return {
         severity: 'urgent',
         title: `SẮP ĐẾN (Còn ${days} ngày): ${next.title}`,
-        detail: `Ngày ${formatDateVN(next.dateISO)} · Dự chi ${formatVND(next.amount)}${assigneeNote} · Sắp xếp công việc sớm nhé!`,
+        detail: `Ngày ${formatDateVN(next.dateISO)} (${lunarNote}) · Dự chi ${formatVND(next.amount)}${assigneeNote} · Sắp xếp công việc sớm nhé!`,
         focusEvent: next,
       };
     }
@@ -818,14 +982,14 @@ export class FamilyLedgerStore {
       return {
         severity: 'soon',
         title: `Sắp tới (Còn ${days} ngày): ${next.title}`,
-        detail: `Ngày ${formatDateVN(next.dateISO)} · Dự chi ${formatVND(next.amount)}${assigneeNote} · Tổng ${pending.length} đám chưa đi trong năm`,
+        detail: `Ngày ${formatDateVN(next.dateISO)} (${lunarNote}) · Dự chi ${formatVND(next.amount)}${assigneeNote} · Tổng ${pending.length} đám chưa đi trong năm`,
         focusEvent: next,
       };
     }
     return {
       severity: 'calm',
       title: `Kế tiếp (Còn ${days} ngày): ${next.title}`,
-      detail: `Ngày ${formatDateVN(next.dateISO)} · Dự chi ${formatVND(next.amount)}${assigneeNote} · Còn rộng thời gian chuẩn bị`,
+      detail: `Ngày ${formatDateVN(next.dateISO)} (${lunarNote}) · Dự chi ${formatVND(next.amount)}${assigneeNote} · Còn rộng thời gian chuẩn bị`,
       focusEvent: next,
     };
   }
